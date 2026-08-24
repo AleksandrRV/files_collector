@@ -104,7 +104,6 @@ public sealed partial class FormatsViewModel : ObservableObject
 
     public ObservableCollection<ExtensionRow> Rows { get; } = [];
 
-    public event EventHandler<ExtensionRow>? RowChanged;
 
     public event EventHandler? EnableAllRequested;
 

@@ -695,7 +695,6 @@ public sealed partial class MainWindowViewModel : ObservableObject
         };
         Presets.SwitchPresetRequested += (_, id) => TrySwitchPreset(id);
 
-        Formats.RowChanged += OnExtensionRowChanged;
         Formats.EnableAllRequested += (_, _) => { SetAllExtensionsEnabled(true); ApplyExtensionChanges(); };
         Formats.DisableAllRequested += (_, _) => { SetAllExtensionsEnabled(false); ApplyExtensionChanges(); };
         Formats.InvertRequested += (_, _) =>
@@ -711,7 +710,6 @@ public sealed partial class MainWindowViewModel : ObservableObject
 
         Filters.PropertyChanged += OnFiltersPropertyChange;
 
-        Tree.FiltersChanged += (_, _) => ApplyTreeFilter();
         Tree.PropertyChanged += OnTreePropertyChange;
         Tree.BulkApplyModeRequested += (_, mode) =>
         {

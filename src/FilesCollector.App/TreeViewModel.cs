@@ -65,9 +65,6 @@ public sealed partial class TreeViewModel : ObservableObject
 
     public ObservableCollection<FileTreeNode> MultiSelected { get; } = [];
 
-    public event EventHandler? SelectionChanged;
-
-    public event EventHandler? FiltersChanged;
 
     public event EventHandler<TreeSection>? SectionChanged;
 
@@ -150,8 +147,4 @@ public sealed partial class TreeViewModel : ObservableObject
         SelectedCount = list.Count;
     }
 
-    public void NotifyFiltersChanged()
-    {
-        FiltersChanged?.Invoke(this, EventArgs.Empty);
-    }
 }
