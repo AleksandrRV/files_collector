@@ -13,12 +13,12 @@
                    RadiusX="1.5"
                    RadiusY="1.5"
                    Fill="{DynamicResource AccentSoftBrush}" />
-        <DataTemplate.Triggers>
-          <DataTrigger Binding="{Binding IsAboveThreshold}" Value="True">
-            <Setter TargetName="Bar" Property="Fill" Value="{DynamicResource WarningSoftBrush}" />
-          </DataTrigger>
-        </DataTemplate.Triggers>
       </Border>
+      <DataTemplate.Triggers>
+        <DataTrigger Binding="{Binding IsAboveThreshold}" Value="True">
+          <Setter TargetName="Bar" Property="Fill" Value="{DynamicResource WarningSoftBrush}" />
+        </DataTrigger>
+      </DataTemplate.Triggers>
     </DataTemplate>
   </UserControl.Resources>
   <StackPanel>

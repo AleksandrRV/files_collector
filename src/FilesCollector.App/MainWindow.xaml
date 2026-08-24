@@ -209,8 +209,9 @@
     </Grid.RowDefinitions>
 
     <!-- ================= Command bar ================= -->
-    <Grid Grid.Row="0" Background="{DynamicResource SurfaceBrush}" Padding="12,8">
-      <Grid.ColumnDefinitions>
+    <Border Grid.Row="0" Background="{DynamicResource SurfaceBrush}" Padding="12,8">
+      <Grid>
+        <Grid.ColumnDefinitions>
         <ColumnDefinition Width="Auto" />
         <ColumnDefinition Width="Auto" />
         <ColumnDefinition Width="Auto" />
@@ -410,7 +411,8 @@
           <TextBlock Text="Cancel" />
         </Button>
       </StackPanel>
-    </Grid>
+      </Grid>
+    </Border>
 
     <!-- ================= Root bar ================= -->
     <Border Grid.Row="1" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,0,0,1" Background="{DynamicResource SurfaceBrush}" Padding="12,6">
@@ -1335,7 +1337,6 @@
           Visibility="{Binding IsPaletteOpen, Converter={StaticResource BoolToVisibilityConverter}}"
           MouseLeftButtonDown="OnPaletteBackdropClick">
       <Border Width="640"
-              MaxWidth="0.8"
               HorizontalAlignment="Center"
               VerticalAlignment="Top"
               Margin="0,110,0,0"
