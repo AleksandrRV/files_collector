@@ -40,6 +40,8 @@ public sealed partial class FileTreeNode : ObservableObject
 
     public bool IsPlaceholder { get; }
 
+    public FileTreeNode? Parent { get; internal set; }
+
     public ObservableCollection<FileTreeNode> Children { get; } = [];
 
     [ObservableProperty]
@@ -63,6 +65,27 @@ public sealed partial class FileTreeNode : ObservableObject
     [ObservableProperty]
     private RuleSource ruleSource = RuleSource.Global;
 
+    [ObservableProperty]
+    private bool isExpandedState;
+
+    [ObservableProperty]
+    private bool isMultiSelected;
+
+    [ObservableProperty]
+    private string? planReason;
+
+    [ObservableProperty]
+    private long? planSizeBytes;
+
+    [ObservableProperty]
+    private string sourceGlyph = "·";
+
+    [ObservableProperty]
+    private string sourceDescription = "Global default mode.";
+
+    [ObservableProperty]
+    private string sizeDisplay = string.Empty;
+
     public bool HasLocalRule => RuleSource == RuleSource.Local;
 
     public string EffectiveModeText => EffectiveMode switch
@@ -85,7 +108,17 @@ public sealed partial class FileTreeNode : ObservableObject
 
     public bool IsDimmed => !IsAccessible || IsReparsePoint || IsPlaceholder || EffectiveMode == CollectionMode.Excluded;
 
+    public bool IsProblem => !IsAccessible && !IsPlaceholder;
+
     public string IconText => IsPlaceholder ? "…" : IsDirectory ? "Folder" : "File";
+
+    public string IconGlyph => IsPlaceholder ? "…" : IsDirectory ? "\uE8B7" : "\uE8A5";
+
+    public bool IsLargeFile => PlanSizeBytes is { } size && size > 1024 * 1024;
+
+    public bool IsBinaryFile => BinaryExtensions.IsBinary(Path.GetExtension(DisplayName).ToLowerInvariant());
+
+    public bool HasExtension => !string.IsNullOrEmpty(Path.GetExtension(DisplayName));
 
     public string StatusText =>
         IsPlaceholder ? "Loading" :
@@ -161,5 +194,6 @@ public sealed partial class FileTreeNode : ObservableObject
         OnPropertyChanged(nameof(IsDimmed));
         OnPropertyChanged(nameof(StatusText));
         OnPropertyChanged(nameof(ToolTipText));
+        OnPropertyChanged(nameof(IsProblem));
     }
 }

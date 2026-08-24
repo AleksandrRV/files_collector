@@ -2,251 +2,1376 @@
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:local="clr-namespace:FilesCollector.App"
+        xmlns:controls="clr-namespace:FilesCollector.App.Controls"
+        xmlns:inspector="clr-namespace:FilesCollector.App.Inspector"
+        xmlns:toasts="clr-namespace:FilesCollector.App.Toasts"
         Title="Files Collector"
-        Width="1080"
-        Height="700"
-        MinWidth="820"
-        MinHeight="540"
+        Width="1280"
+        Height="780"
+        MinWidth="1024"
+        MinHeight="620"
         WindowStartupLocation="CenterScreen"
+        AllowDrop="True"
+        DragOver="OnWindowDragOver"
+        Drop="OnWindowDrop"
         PreviewKeyDown="OnWindowPreviewKeyDown">
+
   <Window.Resources>
-    <BooleanToVisibilityConverter x:Key="BooleanToVisibilityConverter" />
+    <local:BoolToVisibilityConverter x:Key="BoolToVisibilityConverter" />
+    <local:InverseBoolToVisibilityConverter x:Key="InverseBoolToVisibilityConverter" />
+    <local:StringNullOrEmptyToVisibilityConverter x:Key="StringNullOrEmptyToVisibilityConverter" />
+    <local:NullToVisibilityConverter x:Key="NullToVisibilityConverter" />
+    <local:BoolToGridLengthConverter x:Key="BoolToGridLengthConverter" />
+    <local:ShareToWidthConverter x:Key="ShareToWidthConverter" />
+    <local:SectionEqualsConverter x:Key="SectionEqualsConverter" />
+    <local:SourceGlyphToBrushConverter x:Key="SourceGlyphToBrushConverter" />
+    <local:ModeToBrushConverter x:Key="ModeToBrushConverter" />
+    <local:ModeToSoftBrushConverter x:Key="ModeToSoftBrushConverter" />
+    <local:IntRangeToVisibilityConverter x:Key="IntRangeToVisibilityConverter" />
+    <local:StringToCollectionModeConverter x:Key="StringToCollectionModeConverter" />
+    <local:StringToTreeSectionConverter x:Key="StringToTreeSectionConverter" />
+    <local:StringToInspectorTabConverter x:Key="StringToInspectorTabConverter" />
+    <local:StringToDoubleConverter x:Key="StringToDoubleConverter" />
+    <local:LongToSizeConverter x:Key="LongToSizeConverter" />
+
+    <Style x:Key="FlatMenuButton" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+      <Setter Property="HorizontalContentAlignment" Value="Left" />
+      <Setter Property="Background" Value="Transparent" />
+      <Setter Property="BorderBrush" Value="Transparent" />
+      <Setter Property="Padding" Value="10,6" />
+      <Setter Property="Margin" Value="0,1" />
+    </Style>
+
+    <Style x:Key="RailIcon" TargetType="TextBlock">
+      <Setter Property="FontFamily" Value="Segoe Fluent Icons, Segoe MDL2 Assets" />
+      <Setter Property="FontSize" Value="17" />
+      <Setter Property="HorizontalAlignment" Value="Center" />
+      <Setter Property="VerticalAlignment" Value="Center" />
+      <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}" />
+    </Style>
+
+    <!-- ===== File tree row ===== -->
     <HierarchicalDataTemplate DataType="{x:Type local:FileTreeNode}" ItemsSource="{Binding Children}">
-      <Grid x:Name="NodeRow" ToolTip="{Binding ToolTipText}">
-        <Grid.ColumnDefinitions>
-          <ColumnDefinition Width="58" />
-          <ColumnDefinition Width="*" />
-          <ColumnDefinition Width="105" />
-          <ColumnDefinition Width="90" />
-          <ColumnDefinition Width="112" />
-        </Grid.ColumnDefinitions>
-        <TextBlock Grid.Column="0" Text="{Binding IconText}" />
-        <TextBlock Grid.Column="1" Text="{Binding DisplayName}" TextTrimming="CharacterEllipsis" />
-        <TextBlock Grid.Column="2" Text="{Binding EffectiveModeText}" />
-        <TextBlock Grid.Column="3" Text="{Binding RuleSourceText}" />
-        <TextBlock Grid.Column="4" Foreground="Gray" Text="{Binding StatusText}" />
-      </Grid>
-      <HierarchicalDataTemplate.Triggers>
-        <DataTrigger Binding="{Binding IsDimmed}" Value="True">
-          <Setter TargetName="NodeRow" Property="Opacity" Value="0.55" />
-        </DataTrigger>
-      </HierarchicalDataTemplate.Triggers>
-    </HierarchicalDataTemplate>
-  </Window.Resources>
-
-  <Window.InputBindings>
-    <KeyBinding Key="S" Modifiers="Control" Command="{Binding SavePresetCommand}" />
-    <KeyBinding Key="F5" Command="{Binding ReloadCommand}" />
-  </Window.InputBindings>
-
-  <DockPanel LastChildFill="True" Margin="16">
-    <StatusBar DockPanel.Dock="Bottom" Margin="0,16,0,0">
-      <TextBlock Text="{Binding StatusText}" />
-    </StatusBar>
-
-    <Grid>
-      <Grid.RowDefinitions>
-        <RowDefinition Height="Auto" />
-        <RowDefinition Height="Auto" />
-        <RowDefinition Height="*" />
-        <RowDefinition Height="Auto" />
-      </Grid.RowDefinitions>
-
-      <Grid Grid.Row="0">
-        <Grid.ColumnDefinitions>
-          <ColumnDefinition Width="Auto" />
-          <ColumnDefinition Width="*" />
-          <ColumnDefinition Width="Auto" />
-          <ColumnDefinition Width="Auto" />
-        </Grid.ColumnDefinitions>
-        <TextBlock VerticalAlignment="Center" FontWeight="SemiBold" Text="Files Collector" />
-        <TextBlock Grid.Column="1" Margin="16,0,0,0" VerticalAlignment="Center" Foreground="Gray" Text="Step 7: report generation" />
-        <Button Grid.Column="2" Margin="0,0,8,0" MinWidth="130" Padding="12,5" Command="{Binding GenerateReportCommand}" Content="Create report" />
-        <Button Grid.Column="3" MinWidth="110" Padding="12,5" Command="{Binding ShowAboutCommand}" Content="About" />
-      </Grid>
-
-      <Border Grid.Row="1" Margin="0,18,0,12" Padding="12" BorderBrush="#D0D0D0" BorderThickness="1" CornerRadius="4">
-        <Grid>
+      <Border x:Name="RowBg" Background="Transparent" CornerRadius="5" Margin="1,0" Padding="0,0,8,0">
+        <Grid Height="{DynamicResource TreeRowHeight}">
           <Grid.ColumnDefinitions>
-            <ColumnDefinition Width="Auto" />
             <ColumnDefinition Width="*" />
-            <ColumnDefinition Width="Auto" />
-            <ColumnDefinition Width="Auto" />
-            <ColumnDefinition Width="Auto" />
+            <ColumnDefinition Width="30" />
+            <ColumnDefinition Width="104" />
+            <ColumnDefinition Width="86" />
           </Grid.ColumnDefinitions>
-          <TextBlock VerticalAlignment="Center" FontWeight="SemiBold" Text="Scan root:" />
-          <TextBox Grid.Column="1" Margin="12,0" IsReadOnly="True" Text="{Binding ScanRoot}" />
-          <Button Grid.Column="2" Margin="0,0,8,0" Padding="12,5" Command="{Binding RequestRootChangeCommand}" Content="Change..." />
-          <Button Grid.Column="3" Margin="0,0,8,0" Padding="12,5" Command="{Binding ReloadCommand}" Content="Refresh tree" />
-          <Button Grid.Column="4" Padding="12,5" Command="{Binding RefreshInventoryCommand}" Content="Refresh inventory" />
-        </Grid>
-      </Border>
 
-      <Grid Grid.Row="2">
-        <Grid.ColumnDefinitions>
-          <ColumnDefinition Width="260" />
-          <ColumnDefinition Width="12" />
-          <ColumnDefinition Width="*" />
-        </Grid.ColumnDefinitions>
-        <TabControl Grid.Column="0">
-          <TabItem Header="Preset">
-            <StackPanel Margin="10">
-              <ComboBox DisplayMemberPath="Name"
-                        ItemsSource="{Binding PresetItems}"
-                        SelectedValue="{Binding SelectedPresetId}"
-                        SelectedValuePath="Id" />
-              <TextBlock Margin="0,8,0,0" Foreground="DarkOrange" Text="Unsaved changes" Visibility="{Binding IsPresetDirty, Converter={StaticResource BooleanToVisibilityConverter}}" />
-              <WrapPanel Margin="0,10,0,0">
-                <Button Margin="0,0,8,8" Padding="10,4" Command="{Binding NewPresetCommand}" Content="New" />
-                <Button Margin="0,0,8,8" Padding="10,4" Command="{Binding SavePresetCommand}" Content="Save" />
-                <Button Margin="0,0,8,8" Padding="10,4" Command="{Binding SavePresetAsCommand}" Content="Save as..." />
-                <Button Margin="0,0,8,8" Padding="10,4" Command="{Binding RenamePresetCommand}" Content="Rename" />
-                <Button Margin="0,0,8,8" Padding="10,4" Command="{Binding DeletePresetCommand}" Content="Delete" />
-                <Button Margin="0,0,8,8" Padding="10,4" Command="{Binding DiscardPresetChangesCommand}" Content="Discard" />
-              </WrapPanel>
-            </StackPanel>
-          </TabItem>
-          <TabItem Header="Search">
-            <StackPanel Margin="10">
-              <TextBlock Text="Search tree:" />
-              <TextBox Margin="0,4,0,10" Text="{Binding SearchText, UpdateSourceTrigger=PropertyChanged}" />
-              <CheckBox Content="Show files" IsChecked="{Binding ShowFiles}" />
-              <CheckBox Margin="0,6,0,0" Content="Show folders" IsChecked="{Binding ShowFolders}" />
-              <CheckBox Margin="0,6,0,0" Content="Local rules only" IsChecked="{Binding ShowLocalRulesOnly}" />
-              <CheckBox Margin="0,6,0,0" Content="Excluded only" IsChecked="{Binding ShowExcludedOnly}" />
-              <TextBlock Margin="0,16,0,4" Text="Selected item:" />
-              <TextBox IsReadOnly="True" AcceptsReturn="True" Height="110" Text="{Binding SelectedNodeDetails}" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" />
-            </StackPanel>
-          </TabItem>
-          <TabItem Header="Formats">
-            <DockPanel Margin="8">
-              <CheckBox DockPanel.Dock="Top" Margin="0,0,0,8" Content="Include all extensions" IsChecked="{Binding IncludeAllExtensions}" />
-              <DataGrid AutoGenerateColumns="False" CanUserAddRows="False" CanUserDeleteRows="False" ItemsSource="{Binding ExtensionRuleItems}">
-                <DataGrid.Columns>
-                  <DataGridCheckBoxColumn Binding="{Binding Enabled, Mode=TwoWay}" Header="Use" />
-                  <DataGridTextColumn Binding="{Binding Extension}" Header="Extension" IsReadOnly="True" />
-                  <DataGridTextColumn Binding="{Binding Count}" Header="Files" IsReadOnly="True" />
-                  <DataGridTemplateColumn Header="Mode">
-                    <DataGridTemplateColumn.CellTemplate>
-                      <DataTemplate>
-                        <ComboBox ItemsSource="{Binding DataContext.CollectionModes, RelativeSource={RelativeSource AncestorType=DataGrid}}" SelectedItem="{Binding Mode, Mode=TwoWay}" />
-                      </DataTemplate>
-                    </DataGridTemplateColumn.CellTemplate>
-                  </DataGridTemplateColumn>
-                </DataGrid.Columns>
-              </DataGrid>
-            </DockPanel>
-          </TabItem>
-          <TabItem Header="Filters">
-            <ScrollViewer VerticalScrollBarVisibility="Auto">
-              <StackPanel Margin="10">
-                <CheckBox Content="Include hidden files" IsChecked="{Binding IncludeHidden}" />
-                <CheckBox Margin="0,6,0,0" Content="Include system files" IsChecked="{Binding IncludeSystem}" />
-                <CheckBox Margin="0,6,0,0" Content="Follow reparse points" IsChecked="{Binding FollowReparsePoints}" />
-                <CheckBox Margin="0,6,0,0" Content="Redact root path in output" IsChecked="{Binding RedactRootPath}" />
-                <CheckBox Margin="0,6,0,0" Content="Include per-file YAML metadata blocks" IsChecked="{Binding IncludeFileMetadataBlocks}" />
-                <TextBlock Margin="0,12,0,2" Text="Inventory refresh interval, minutes (0 disables):" />
-                <TextBox Text="{Binding InventoryRefreshMinutes, UpdateSourceTrigger=PropertyChanged}" />
-                <TextBlock Margin="0,4,0,2" Foreground="Gray" Text="{Binding InventoryStatus}" TextWrapping="Wrap" />
-                <Button Margin="0,4,0,0" Command="{Binding RefreshInventoryCommand}" Content="Refresh inventory now" />
-                <TextBlock Margin="0,12,0,2" Text="Maximum file size, KiB:" />
-                <TextBox Text="{Binding MaxFileSizeKiB, UpdateSourceTrigger=PropertyChanged}" />
-                <TextBlock Margin="0,12,0,2" Text="Binary file mode:" />
-                <ComboBox ItemsSource="{Binding CollectionModes}" SelectedItem="{Binding BinaryFileMode}" />
-                <TextBlock Margin="0,12,0,2" Text="Include patterns, one per line:" />
-                <TextBox AcceptsReturn="True" Height="80" Text="{Binding IncludePatternsText, UpdateSourceTrigger=PropertyChanged}" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" />
-                <TextBlock Margin="0,12,0,2" Text="Exclude patterns, one per line:" />
-                <TextBox AcceptsReturn="True" Height="80" Text="{Binding ExcludePatternsText, UpdateSourceTrigger=PropertyChanged}" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" />
-                <Button Margin="0,12,0,0" Command="{Binding RefreshPlanCommand}" Content="Refresh plan" />
-              </StackPanel>
-            </ScrollViewer>
-          </TabItem>
-          <TabItem Header="Prefix">
-            <StackPanel Margin="10">
-              <ComboBox DisplayMemberPath="Name"
-                        ItemsSource="{Binding PrefixPresets.Items}"
-                        SelectedValue="{Binding PrefixPresets.SelectedId}"
-                        SelectedValuePath="Id" />
-              <TextBlock Margin="0,8,0,0" Foreground="DarkOrange" Text="Unsaved changes" Visibility="{Binding PrefixPresets.IsDirty, Converter={StaticResource BooleanToVisibilityConverter}}" />
-              <TextBox Margin="0,8,0,0" AcceptsReturn="True" Height="160" IsEnabled="{Binding PrefixPresets.HasSelection}" Text="{Binding PrefixPresets.Content, UpdateSourceTrigger=PropertyChanged}" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" />
-              <WrapPanel Margin="0,10,0,0">
-                <Button Margin="0,0,8,8" Padding="10,4" Command="{Binding PrefixPresets.ClearSelectionCommand}" Content="No prefix" />
-                <Button Margin="0,0,8,8" Padding="10,4" Command="{Binding PrefixPresets.NewCommand}" Content="New" />
-                <Button Margin="0,0,8,8" Padding="10,4" Command="{Binding PrefixPresets.SaveCommand}" Content="Save" />
-                <Button Margin="0,0,8,8" Padding="10,4" Command="{Binding PrefixPresets.SaveAsCommand}" Content="Save as..." />
-                <Button Margin="0,0,8,8" Padding="10,4" Command="{Binding PrefixPresets.RenameCommand}" Content="Rename" />
-                <Button Margin="0,0,8,8" Padding="10,4" Command="{Binding PrefixPresets.DeleteCommand}" Content="Delete" />
-                <Button Margin="0,0,8,8" Padding="10,4" Command="{Binding PrefixPresets.DiscardCommand}" Content="Discard" />
-              </WrapPanel>
-            </StackPanel>
-          </TabItem>
-        </TabControl>
+          <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
+            <TextBlock FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                       FontSize="13"
+                       VerticalAlignment="Center"
+                       Foreground="{DynamicResource TextSecondaryBrush}"
+                       Text="{Binding IconGlyph}" />
+            <TextBlock x:Name="NameText"
+                       Margin="6,0,0,0"
+                       VerticalAlignment="Center"
+                       FontSize="13"
+                       Foreground="{DynamicResource TextPrimaryBrush}"
+                       Text="{Binding DisplayName}"
+                       TextTrimming="CharacterEllipsis"
+                       ToolTip="{Binding ToolTipText}" />
+            <TextBlock FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                       FontSize="12"
+                       Margin="6,0,0,0"
+                       VerticalAlignment="Center"
+                       Foreground="{DynamicResource WarningBrush}"
+                       Text="&#xE7BA;"
+                       Visibility="{Binding IsProblem, Converter={StaticResource BoolToVisibilityConverter}}" />
+          </StackPanel>
 
-        <TabControl Grid.Column="2">
-          <TabItem Header="File tree">
-            <TreeView ItemsSource="{Binding RootNodes}"
-                      SelectedItemChanged="OnSelectedItemChanged"
-                      TreeViewItem.Expanded="OnTreeViewItemExpanded"
-                      PreviewMouseRightButtonDown="OnTreeViewPreviewMouseRightButtonDown">
-              <TreeView.ContextMenu>
-                <ContextMenu>
-                  <MenuItem Header="Full" Tag="Full" Click="OnApplyModeMenuItemClick" />
-                  <MenuItem Header="Signatures" Tag="Signatures" Click="OnApplyModeMenuItemClick" />
-                  <MenuItem Header="Listed" Tag="Listed" Click="OnApplyModeMenuItemClick" />
-                  <MenuItem Header="Excluded" Tag="Excluded" Click="OnApplyModeMenuItemClick" />
-                  <Separator />
-                  <MenuItem Header="Reset local rule" Click="OnResetLocalRuleMenuItemClick" />
-                </ContextMenu>
-              </TreeView.ContextMenu>
-              <TreeView.ItemContainerStyle>
-                <Style TargetType="TreeViewItem">
-                  <Setter Property="IsExpanded" Value="False" />
-                  <Style.Triggers>
-                    <DataTrigger Binding="{Binding IsVisible}" Value="False">
-                      <Setter Property="Visibility" Value="Collapsed" />
-                    </DataTrigger>
-                  </Style.Triggers>
-                </Style>
-              </TreeView.ItemContainerStyle>
-            </TreeView>
-          </TabItem>
-          <TabItem Header="Preview">
-            <DockPanel Margin="8">
-              <Button DockPanel.Dock="Top" HorizontalAlignment="Left" Margin="0,0,0,8" Command="{Binding RefreshPreviewCommand}" Content="Refresh preview" />
-              <TextBox IsReadOnly="True" AcceptsReturn="True" Text="{Binding PreviewText}" TextWrapping="NoWrap" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto" FontFamily="Consolas" />
-            </DockPanel>
-          </TabItem>
-        </TabControl>
-      </Grid>
+          <!-- Meta block (hidden on hover, quick actions appear instead) -->
+          <Grid Grid.Column="1" Grid.ColumnSpan="3"
+                Visibility="{Binding IsMouseOver, RelativeSource={RelativeSource AncestorType={x:Type TreeViewItem}}, Converter={StaticResource InverseBoolToVisibilityConverter}}">
+            <Grid.ColumnDefinitions>
+              <ColumnDefinition Width="30" />
+              <ColumnDefinition Width="104" />
+              <ColumnDefinition Width="86" />
+            </Grid.ColumnDefinitions>
+            <TextBlock Grid.Column="0"
+                       FontFamily="Cascadia Code, Consolas"
+                       FontSize="10"
+                       FontWeight="Bold"
+                       HorizontalAlignment="Center"
+                       VerticalAlignment="Center"
+                       Text="{Binding SourceGlyph}"
+                       Foreground="{Binding SourceGlyph, Converter={StaticResource SourceGlyphToBrushConverter}}"
+                       ToolTip="{Binding SourceDescription}" />
+            <controls:ModeBadge Grid.Column="1" Margin="0,0,8,0" Mode="{Binding EffectiveMode}" VerticalAlignment="Center" />
+            <TextBlock Grid.Column="2"
+                       FontFamily="Cascadia Code, Consolas"
+                       FontSize="11"
+                       HorizontalAlignment="Right"
+                       VerticalAlignment="Center"
+                       Foreground="{DynamicResource TextTertiaryBrush}"
+                       Text="{Binding SizeDisplay}"
+                       TextTrimming="CharacterEllipsis" />
+          </Grid>
 
-      <Border Grid.Row="3" Margin="0,12,0,0" Padding="12" BorderBrush="#D0D0D0" BorderThickness="1" CornerRadius="4">
-        <Grid>
-          <Grid.ColumnDefinitions>
-            <ColumnDefinition Width="Auto" />
-            <ColumnDefinition Width="170" />
-            <ColumnDefinition Width="Auto" />
-            <ColumnDefinition Width="Auto" />
-            <ColumnDefinition Width="*" />
-          </Grid.ColumnDefinitions>
-          <TextBlock VerticalAlignment="Center" FontWeight="SemiBold" Text="Collection mode:" />
-          <ComboBox Grid.Column="1" Margin="12,0" ItemsSource="{Binding CollectionModes}" SelectedItem="{Binding SelectedMode}" />
-          <Button Grid.Column="2" Padding="12,5" Command="{Binding ApplySelectedModeCommand}" Content="Apply" />
-          <Button Grid.Column="3" Margin="8,0,0,0" Padding="12,5" Command="{Binding ResetLocalRuleCommand}" Content="Reset local rule" />
-          <StackPanel Grid.Column="4" Margin="16,0,0,0" VerticalAlignment="Center">
-            <StackPanel Orientation="Horizontal">
-              <TextBlock Foreground="Gray" Text="Folder rules apply recursively. Rules: " />
-              <TextBlock Foreground="Gray" Text="{Binding RuleCount}" />
-            </StackPanel>
-            <TextBlock Foreground="Gray" Text="{Binding PlanSummary}" TextTrimming="CharacterEllipsis" />
-            <StackPanel Orientation="Horizontal">
-              <TextBlock Foreground="Gray" Text="{Binding GenerationStatus}" TextTrimming="CharacterEllipsis" />
-              <Button Margin="12,0,0,0" Padding="8,2" Command="{Binding GenerateReportCancelCommand}" Content="Cancel" />
-              <Button Margin="8,0,0,0" Padding="8,2" Command="{Binding OpenOutputCommand}" Content="Open report" />
-              <Button Margin="8,0,0,0" Padding="8,2" Command="{Binding OpenOutputsCommand}" Content="Open outputs" />
-            </StackPanel>
+          <!-- Hover quick actions -->
+          <StackPanel Grid.Column="1"
+                      Grid.ColumnSpan="3"
+                      Orientation="Horizontal"
+                      HorizontalAlignment="Right"
+                      VerticalAlignment="Center"
+                      Visibility="{Binding IsMouseOver, RelativeSource={RelativeSource AncestorType={x:Type TreeViewItem}}, Converter={StaticResource BoolToVisibilityConverter}}">
+            <Button Style="{StaticResource QuickActionButton}" Content="F" Tag="Full" Click="OnQuickActionClick" Foreground="{DynamicResource ModeFullBrush}" ToolTip="Set Full (1)" />
+            <Button Style="{StaticResource QuickActionButton}" Content="S" Margin="2,0,0,0" Tag="Signatures" Click="OnQuickActionClick" Foreground="{DynamicResource ModeSignaturesBrush}" ToolTip="Set Signatures (2)" />
+            <Button Style="{StaticResource QuickActionButton}" Content="L" Margin="2,0,0,0" Tag="Listed" Click="OnQuickActionClick" Foreground="{DynamicResource ModeListedBrush}" ToolTip="Set Listed (3)" />
+            <Button Style="{StaticResource QuickActionButton}" Content="E" Margin="2,0,0,0" Tag="Excluded" Click="OnQuickActionClick" Foreground="{DynamicResource ModeExcludedBrush}" ToolTip="Set Excluded (4)" />
+            <Button Style="{StaticResource QuickActionButton}" Content="&#x21BA;" Margin="2,0,0,0" Tag="reset" Click="OnQuickActionClick" Foreground="{DynamicResource TextSecondaryBrush}" ToolTip="Reset local rule"
+                    Visibility="{Binding HasLocalRule, Converter={StaticResource BoolToVisibilityConverter}}" />
           </StackPanel>
         </Grid>
       </Border>
+      <HierarchicalDataTemplate.Triggers>
+        <DataTrigger Binding="{Binding IsSelected, RelativeSource={RelativeSource AncestorType={x:Type TreeViewItem}}}" Value="True">
+          <Setter TargetName="RowBg" Property="Background" Value="{DynamicResource SelectionBrush}" />
+        </DataTrigger>
+        <DataTrigger Binding="{Binding IsMultiSelected}" Value="True">
+          <Setter TargetName="RowBg" Property="Background" Value="{DynamicResource SelectionBrush}" />
+        </DataTrigger>
+        <DataTrigger Binding="{Binding IsPlaceholder}" Value="True">
+          <Setter TargetName="NameText" Property="Foreground" Value="{DynamicResource TextTertiaryBrush}" />
+          <Setter TargetName="NameText" Property="FontStyle" Value="Italic" />
+        </DataTrigger>
+        <DataTrigger Binding="{Binding IsDimmed}" Value="True">
+          <Setter TargetName="RowBg" Property="Opacity" Value="0.6" />
+        </DataTrigger>
+        <DataTrigger Binding="{Binding IsVisible}" Value="False">
+          <Setter Property="Visibility" Value="Collapsed" />
+        </DataTrigger>
+      </HierarchicalDataTemplate.Triggers>
+    </HierarchicalDataTemplate>
+
+    <!-- ===== Palette entry row ===== -->
+    <DataTemplate x:Key="PaletteEntryTemplate">
+      <Grid Margin="2,1">
+        <Grid.ColumnDefinitions>
+          <ColumnDefinition Width="Auto" />
+          <ColumnDefinition Width="*" />
+          <ColumnDefinition Width="Auto" />
+        </Grid.ColumnDefinitions>
+        <TextBlock x:Name="KindIcon"
+                   Grid.Column="0"
+                   FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                   FontSize="13"
+                   Margin="6,0,10,0"
+                   VerticalAlignment="Center"
+                   Text="&#xE713;"
+                   Foreground="{DynamicResource TextSecondaryBrush}">
+          <TextBlock.Style>
+            <Style TargetType="TextBlock">
+              <Setter Property="Text" Value="&#xE713;" />
+              <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}" />
+              <Style.Triggers>
+                <DataTrigger Binding="{Binding Kind}" Value="File">
+                  <Setter Property="Text" Value="&#xE8A5;" />
+                  <Setter Property="Foreground" Value="{DynamicResource ModeSignaturesBrush}" />
+                </DataTrigger>
+                <DataTrigger Binding="{Binding Kind}" Value="Folder">
+                  <Setter Property="Text" Value="&#xE8B7;" />
+                  <Setter Property="Foreground" Value="{DynamicResource ModeListedBrush}" />
+                </DataTrigger>
+              </Style.Triggers>
+            </Style>
+          </TextBlock.Style>
+        </TextBlock>
+        <StackPanel Grid.Column="1" VerticalAlignment="Center">
+          <TextBlock Text="{Binding Title}" FontSize="13" Foreground="{DynamicResource TextPrimaryBrush}" TextTrimming="CharacterEllipsis" />
+          <TextBlock Text="{Binding Detail}" FontSize="11" Foreground="{DynamicResource TextTertiaryBrush}" TextTrimming="CharacterEllipsis" />
+        </StackPanel>
+        <TextBlock Grid.Column="2" Style="{StaticResource KbdText}" Margin="12,0,8,0" Text="{Binding Hotkey}" />
+      </Grid>
+    </DataTemplate>
+  </Window.Resources>
+
+  <Window.InputBindings>
+    <KeyBinding Key="S" Modifiers="Control" Command="{Binding Presets.SavePresetCommand}" />
+    <KeyBinding Key="S" Modifiers="Control, Shift" Command="{Binding Presets.SavePresetAsCommand}" />
+    <KeyBinding Key="O" Modifiers="Control" Command="{Binding OpenOutputCommand}" />
+    <KeyBinding Key="O" Modifiers="Control, Shift" Command="{Binding OpenOutputsCommand}" />
+    <KeyBinding Key="B" Modifiers="Control" Command="{Binding ToggleLeftPanelCommand}" />
+    <KeyBinding Key="J" Modifiers="Control" Command="{Binding ToggleRightPanelCommand}" />
+    <KeyBinding Key="K" Modifiers="Control" Command="{Binding OpenPaletteCommand}" />
+  </Window.InputBindings>
+
+  <Grid>
+    <Grid.RowDefinitions>
+      <RowDefinition Height="Auto" />
+      <RowDefinition Height="Auto" />
+      <RowDefinition Height="*" />
+      <RowDefinition Height="Auto" />
+    </Grid.RowDefinitions>
+
+    <!-- ================= Command bar ================= -->
+    <Grid Grid.Row="0" Background="{DynamicResource SurfaceBrush}" Padding="12,8">
+      <Grid.ColumnDefinitions>
+        <ColumnDefinition Width="Auto" />
+        <ColumnDefinition Width="Auto" />
+        <ColumnDefinition Width="Auto" />
+        <ColumnDefinition Width="*" />
+        <ColumnDefinition Width="Auto" />
+        <ColumnDefinition Width="Auto" />
+        <ColumnDefinition Width="Auto" />
+        <ColumnDefinition Width="Auto" />
+      </Grid.ColumnDefinitions>
+
+      <Button Grid.Column="0" Style="{StaticResource IconButton}" Command="{Binding ToggleLeftPanelCommand}" ToolTip="Toggle settings panel (Ctrl+B)">
+        <StackPanel VerticalAlignment="Center">
+          <Rectangle Width="14" Height="1.6" Fill="{DynamicResource TextSecondaryBrush}" Margin="0,0,0,3" />
+          <Rectangle Width="14" Height="1.6" Fill="{DynamicResource TextSecondaryBrush}" Margin="0,0,0,3" />
+          <Rectangle Width="14" Height="1.6" Fill="{DynamicResource TextSecondaryBrush}" />
+        </StackPanel>
+      </Button>
+
+      <StackPanel Grid.Column="1" Orientation="Horizontal" Margin="10,0,0,0">
+        <TextBlock Style="{StaticResource AppNameText}" Text="Files Collector" />
+        <Border Margin="8,0,0,0"
+                Padding="6,1"
+                CornerRadius="4"
+                Background="{DynamicResource AccentSoftBrush}"
+                Visibility="{Binding IsPortable, Converter={StaticResource BoolToVisibilityConverter}}">
+          <TextBlock Style="{StaticResource BadgeText}" FontSize="10" Foreground="{DynamicResource AccentSoftTextBrush}" Text="PORTABLE" />
+        </Border>
+      </StackPanel>
+
+      <!-- Preset chip -->
+      <Button x:Name="PresetChipButton"
+              Grid.Column="2"
+              Margin="12,0,0,0"
+              Padding="10,4"
+              Cursor="Hand"
+              Click="OnPresetChipClick"
+              ToolTip="Active preset — switch or manage presets">
+        <Button.Template>
+          <ControlTemplate TargetType="Button">
+            <Border x:Name="Bd" CornerRadius="999" Background="{DynamicResource SurfaceBrush}" BorderBrush="{DynamicResource BorderStrongBrush}" BorderThickness="1" Padding="{TemplateBinding Padding}">
+              <StackPanel Orientation="Horizontal">
+                <Ellipse Width="7"
+                         Height="7"
+                         Margin="0,0,7,0"
+                         VerticalAlignment="Center"
+                         Fill="{DynamicResource TextTertiaryBrush}"
+                         Visibility="{Binding Presets.IsDirty, Converter={StaticResource BoolToVisibilityConverter}}" />
+                <TextBlock VerticalAlignment="Center" Foreground="{DynamicResource TextPrimaryBrush}" Text="{Binding Presets.ActivePresetName}" />
+                <TextBlock FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="9" Margin="7,1,0,0" VerticalAlignment="Center" Foreground="{DynamicResource TextTertiaryBrush}" Text="&#xE70D;" />
+              </StackPanel>
+            </Border>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsMouseOver" Value="True">
+                <Setter TargetName="Bd" Property="Background" Value="{DynamicResource HoverBrush}" />
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Button.Template>
+      </Button>
+      <Popup x:Name="PresetPopup"
+             PlacementTarget="{Binding ElementName=PresetChipButton}"
+             Placement="Bottom"
+             StaysOpen="False"
+             AllowsTransparency="True"
+             PopupAnimation="Fade">
+        <Border Margin="0,4,0,0"
+                Padding="6"
+                CornerRadius="8"
+                Background="{DynamicResource SurfaceRaisedBrush}"
+                BorderBrush="{DynamicResource BorderStrongBrush}"
+                BorderThickness="1"
+                Effect="{StaticResource PopupShadow}">
+          <StackPanel MinWidth="230">
+            <ItemsControl ItemsSource="{Binding Presets.PresetItems}" MouseLeftButtonDown="OnPresetPopupItemClicked">
+              <ItemsControl.ItemTemplate>
+                <DataTemplate>
+                  <Button Style="{StaticResource FlatMenuButton}"
+                          Command="{Binding DataContext.Presets.SwitchPresetCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                          CommandParameter="{Binding}">
+                    <StackPanel Orientation="Horizontal">
+                      <TextBlock Text="{Binding Name}" />
+                      <TextBlock Margin="6,0,0,0"
+                                 FontSize="11"
+                                 Foreground="{DynamicResource TextTertiaryBrush}"
+                                 Text="(default)"
+                                 Visibility="{Binding IsDefault, Converter={StaticResource BoolToVisibilityConverter}}" />
+                    </StackPanel>
+                  </Button>
+                </DataTemplate>
+              </ItemsControl.ItemTemplate>
+            </ItemsControl>
+            <Border Height="1" Margin="4,5" Background="{DynamicResource BorderBrush}" />
+            <Button Style="{StaticResource FlatMenuButton}" Command="{Binding Presets.NewPresetCommand}">
+              <StackPanel Orientation="Horizontal">
+                <TextBlock FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="12" Margin="0,0,8,0" Text="&#xE710;" />
+                <TextBlock Text="New preset" />
+              </StackPanel>
+            </Button>
+            <Button Style="{StaticResource FlatMenuButton}" Command="{Binding Presets.SavePresetCommand}">
+              <Grid>
+                <TextBlock Text="Save preset" />
+                <TextBlock HorizontalAlignment="Right" Style="{StaticResource KbdText}" Text="Ctrl+S" />
+              </Grid>
+            </Button>
+            <Button Style="{StaticResource FlatMenuButton}" Command="{Binding Presets.SavePresetAsCommand}">
+              <Grid>
+                <TextBlock Text="Save preset as…" />
+                <TextBlock HorizontalAlignment="Right" Style="{StaticResource KbdText}" Text="Ctrl+Shift+S" />
+              </Grid>
+            </Button>
+            <Button Style="{StaticResource FlatMenuButton}" Command="{Binding Presets.RenamePresetCommand}">
+              <TextBlock Text="Rename" />
+            </Button>
+            <Button Style="{StaticResource FlatMenuButton}" Command="{Binding Presets.DeletePresetCommand}">
+              <TextBlock Foreground="{DynamicResource ErrorBrush}" Text="Delete" />
+            </Button>
+            <Button Style="{StaticResource FlatMenuButton}" Command="{Binding Presets.DiscardChangesCommand}">
+              <TextBlock Text="Discard changes" />
+            </Button>
+          </StackPanel>
+        </Border>
+      </Popup>
+
+      <!-- Search / palette trigger -->
+      <Button Grid.Column="4"
+              Width="240"
+              Height="32"
+              Margin="0,0,8,0"
+              Padding="10,0"
+              HorizontalContentAlignment="Left"
+              Cursor="Hand"
+              Command="{Binding OpenPaletteCommand}"
+              Background="{DynamicResource SurfaceBrush}"
+              BorderBrush="{DynamicResource BorderStrongBrush}">
+        <Grid>
+          <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="Auto" />
+            <ColumnDefinition Width="*" />
+            <ColumnDefinition Width="Auto" />
+          </Grid.ColumnDefinitions>
+          <TextBlock Grid.Column="0" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="13" VerticalAlignment="Center" Foreground="{DynamicResource TextTertiaryBrush}" Text="&#xE721;" />
+          <TextBlock Grid.Column="1" Margin="8,0,0,0" VerticalAlignment="Center" Foreground="{DynamicResource TextTertiaryBrush}" Text="Search or run a command…" />
+          <TextBlock Grid.Column="2" Style="{StaticResource KbdText}" Text="Ctrl+K" />
+        </Grid>
+      </Button>
+
+      <Button Grid.Column="5" Style="{StaticResource IconButton}" Command="{Binding ToggleThemeCommand}" ToolTip="Toggle light / dark theme" Content="&#xE706;" />
+
+      <Button x:Name="OverflowButton" Grid.Column="6" Style="{StaticResource IconButton}" Click="OnOverflowClick" ToolTip="More" Content="&#xE712;" />
+      <Popup x:Name="OverflowPopup"
+             PlacementTarget="{Binding ElementName=OverflowButton}"
+             Placement="Bottom"
+             StaysOpen="False"
+             AllowsTransparency="True"
+             PopupAnimation="Fade">
+        <Border Margin="0,4,0,0"
+                Padding="6"
+                CornerRadius="8"
+                MinWidth="220"
+                Background="{DynamicResource SurfaceRaisedBrush}"
+                BorderBrush="{DynamicResource BorderStrongBrush}"
+                BorderThickness="1"
+                Effect="{StaticResource PopupShadow}">
+          <StackPanel>
+            <Button Style="{StaticResource FlatMenuButton}" Command="{Binding OpenOutputsCommand}" MouseLeftButtonDown="OnOverflowItemClicked">
+              <TextBlock Text="Open outputs folder" />
+            </Button>
+            <Button Style="{StaticResource FlatMenuButton}" Command="{Binding OpenOutputCommand}" MouseLeftButtonDown="OnOverflowItemClicked">
+              <TextBlock Text="Open last report" />
+            </Button>
+            <Button Style="{StaticResource FlatMenuButton}" Command="{Binding ToggleDensityCommand}" MouseLeftButtonDown="OnOverflowItemClicked">
+              <TextBlock Text="Toggle density (comfortable / compact)" />
+            </Button>
+            <Border Height="1" Margin="4,5" Background="{DynamicResource BorderBrush}" />
+            <Button Style="{StaticResource FlatMenuButton}" Command="{Binding ShowAboutCommand}" MouseLeftButtonDown="OnOverflowItemClicked">
+              <TextBlock Text="About Files Collector" />
+            </Button>
+          </StackPanel>
+        </Border>
+      </Popup>
+
+      <StackPanel Grid.Column="7" Orientation="Horizontal" Margin="8,0,0,0">
+        <Button Style="{StaticResource AccentButton}"
+                MinWidth="140"
+                Padding="14,5"
+                Command="{Binding GenerateReportCommand}"
+                ToolTip="Generate the Markdown report and JSON manifest">
+          <StackPanel Orientation="Horizontal">
+            <TextBlock FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="14" Margin="0,0,8,0" VerticalAlignment="Center" Text="&#xE7C3;" />
+            <TextBlock VerticalAlignment="Center" Text="Create report" />
+          </StackPanel>
+        </Button>
+        <Button Margin="8,0,0,0"
+                Padding="10,5"
+                Command="{Binding GenerateReportCancelCommand}"
+                Visibility="{Binding IsGeneratingReport, Converter={StaticResource BoolToVisibilityConverter}}">
+          <TextBlock Text="Cancel" />
+        </Button>
+      </StackPanel>
     </Grid>
-  </DockPanel>
+
+    <!-- ================= Root bar ================= -->
+    <Border Grid.Row="1" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,0,0,1" Background="{DynamicResource SurfaceBrush}" Padding="12,6">
+      <Grid>
+        <Grid.ColumnDefinitions>
+          <ColumnDefinition Width="Auto" />
+          <ColumnDefinition Width="*" />
+          <ColumnDefinition Width="Auto" />
+          <ColumnDefinition Width="Auto" />
+          <ColumnDefinition Width="Auto" />
+          <ColumnDefinition Width="Auto" />
+        </Grid.ColumnDefinitions>
+
+        <TextBlock Grid.Column="0"
+                   FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                   FontSize="15"
+                   Margin="0,0,8,0"
+                   VerticalAlignment="Center"
+                   Foreground="{DynamicResource AccentSoftTextBrush}"
+                   Text="&#xE838;" />
+
+        <ItemsControl Grid.Column="1" VerticalAlignment="Center" ItemsSource="{Binding Root.BreadcrumbSegments}">
+          <ItemsControl.ItemsPanel>
+            <ItemsPanelTemplate>
+              <StackPanel Orientation="Horizontal" />
+            </ItemsPanelTemplate>
+          </ItemsControl.ItemsPanel>
+          <ItemsControl.ItemTemplate>
+            <DataTemplate>
+              <StackPanel Orientation="Horizontal">
+                <Button Style="{StaticResource FlatMenuButton}"
+                        Padding="6,2"
+                        Command="{Binding DataContext.Root.ActivateSegmentCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                        CommandParameter="{Binding}"
+                        ToolTip="Set this folder as the scan root">
+                  <TextBlock FontFamily="Cascadia Code, Consolas" FontSize="12" Foreground="{DynamicResource TextSecondaryBrush}" Text="{Binding Label}" />
+                </Button>
+                <TextBlock Margin="2,0" VerticalAlignment="Center" FontSize="11" Foreground="{DynamicResource TextTertiaryBrush}" Text="›" />
+              </StackPanel>
+            </DataTemplate>
+          </ItemsControl.ItemTemplate>
+        </ItemsControl>
+
+        <Button Grid.Column="2" Margin="12,0,0,0" Padding="10,3" Command="{Binding Root.ChangeRootCommand}">
+          <TextBlock Text="Change…" />
+        </Button>
+        <Button Grid.Column="3" Margin="6,0,0,0" Padding="10,3" Command="{Binding Root.ReloadTreeCommand}" ToolTip="Re-read the visible tree (F5 in the tree)">
+          <StackPanel Orientation="Horizontal">
+            <TextBlock FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="12" Margin="0,0,6,0" VerticalAlignment="Center" Text="&#xE72C;" />
+            <TextBlock Text="Tree" />
+          </StackPanel>
+        </Button>
+        <Button Grid.Column="4" Margin="6,0,0,0" Padding="10,3" Command="{Binding Root.RefreshInventoryCommand}" ToolTip="Full background scan of the root">
+          <StackPanel Orientation="Horizontal">
+            <TextBlock FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="12" Margin="0,0,6,0" VerticalAlignment="Center" Text="&#xE895;" />
+            <TextBlock Text="Inventory" />
+          </StackPanel>
+        </Button>
+        <StackPanel Grid.Column="5" Orientation="Horizontal" Margin="14,0,0,0" VerticalAlignment="Center">
+          <Ellipse Width="7"
+                   Height="7"
+                   VerticalAlignment="Center"
+                   Fill="{DynamicResource SuccessBrush}"
+                   Visibility="{Binding Root.IsRefreshingInventory, Converter={StaticResource InverseBoolToVisibilityConverter}}" />
+          <Ellipse Width="7"
+                   Height="7"
+                   VerticalAlignment="Center"
+                   Fill="{DynamicResource AccentBrush}"
+                   Visibility="{Binding Root.IsRefreshingInventory, Converter={StaticResource BoolToVisibilityConverter}}" />
+          <TextBlock Margin="7,0,0,0"
+                     VerticalAlignment="Center"
+                     FontSize="11"
+                     Foreground="{DynamicResource TextTertiaryBrush}"
+                     Text="{Binding Root.InventoryStatus}"
+                     TextTrimming="CharacterEllipsis"
+                     MaxWidth="320" />
+        </StackPanel>
+      </Grid>
+    </Border>
+
+    <!-- ================= Body ================= -->
+    <Grid Grid.Row="2">
+      <Grid.ColumnDefinitions>
+        <ColumnDefinition Width="56" />
+        <ColumnDefinition Width="{Binding Tree.IsLeftPanelVisible, Converter={StaticResource BoolToGridLengthConverter}, ConverterParameter=320}" />
+        <ColumnDefinition Width="Auto" />
+        <ColumnDefinition Width="*" />
+        <ColumnDefinition Width="Auto" />
+        <ColumnDefinition Width="{Binding Tree.IsRightPanelVisible, Converter={StaticResource BoolToGridLengthConverter}, ConverterParameter=360}" />
+      </Grid.ColumnDefinitions>
+
+      <!-- ===== Rail ===== -->
+      <Border Grid.Column="0" Background="{DynamicResource SurfaceBrush}" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,0,1,0" Padding="6,10">
+        <StackPanel>
+          <ToggleButton Style="{StaticResource RailButton}" Command="{Binding Tree.SetSectionCommand}" CommandParameter="{Binding Converter={StaticResource StringToTreeSectionConverter}, ConverterParameter=Explorer}"
+                        IsChecked="{Binding Tree.ActiveSection, Converter={StaticResource SectionEqualsConverter}, ConverterParameter=Explorer, Mode=OneWay}" ToolTip="Explorer (file tree)">
+            <TextBlock Style="{StaticResource RailIcon}" Text="&#xE8FD;" />
+          </ToggleButton>
+          <Grid Margin="0,4">
+            <ToggleButton Style="{StaticResource RailButton}" Command="{Binding Tree.SetSectionCommand}" CommandParameter="{Binding Converter={StaticResource StringToTreeSectionConverter}, ConverterParameter=Extensions}"
+                          IsChecked="{Binding Tree.ActiveSection, Converter={StaticResource SectionEqualsConverter}, ConverterParameter=Extensions, Mode=OneWay}" ToolTip="Extensions (formats)">
+              <TextBlock Style="{StaticResource RailIcon}" Text="&#xE8EC;" />
+            </ToggleButton>
+            <Ellipse Width="6" Height="6" HorizontalAlignment="Right" Margin="0,6,6,0" Fill="{DynamicResource WarningBrush}"
+                     Visibility="{Binding Formats.DisabledCount, Converter={StaticResource IntRangeToVisibilityConverter}}" />
+          </Grid>
+          <Grid Margin="0,4">
+            <ToggleButton Style="{StaticResource RailButton}" Command="{Binding Tree.SetSectionCommand}" CommandParameter="{Binding Converter={StaticResource StringToTreeSectionConverter}, ConverterParameter=Filters}"
+                          IsChecked="{Binding Tree.ActiveSection, Converter={StaticResource SectionEqualsConverter}, ConverterParameter=Filters, Mode=OneWay}" ToolTip="Filters">
+              <TextBlock Style="{StaticResource RailIcon}" Text="&#xE71C;" />
+            </ToggleButton>
+            <Ellipse Width="6" Height="6" HorizontalAlignment="Right" Margin="0,6,6,0" Fill="{DynamicResource AccentBrush}"
+                     Visibility="{Binding Filters.HasActivePatterns, Converter={StaticResource BoolToVisibilityConverter}}" />
+          </Grid>
+          <ToggleButton Style="{StaticResource RailButton}" Command="{Binding Tree.SetSectionCommand}" CommandParameter="{Binding Converter={StaticResource StringToTreeSectionConverter}, ConverterParameter=Prefix}"
+                        IsChecked="{Binding Tree.ActiveSection, Converter={StaticResource SectionEqualsConverter}, ConverterParameter=Prefix, Mode=OneWay}" ToolTip="Prefix" Margin="0,4">
+            <TextBlock Style="{StaticResource RailIcon}" Text="&#xE8A5;" />
+          </ToggleButton>
+          <ToggleButton Style="{StaticResource RailButton}" Command="{Binding Tree.SetSectionCommand}" CommandParameter="{Binding Converter={StaticResource StringToTreeSectionConverter}, ConverterParameter=Presets}"
+                        IsChecked="{Binding Tree.ActiveSection, Converter={StaticResource SectionEqualsConverter}, ConverterParameter=Presets, Mode=OneWay}" ToolTip="Presets" Margin="0,4">
+            <TextBlock Style="{StaticResource RailIcon}" Text="&#xE71F;" />
+          </ToggleButton>
+          <ToggleButton Style="{StaticResource RailButton}" Command="{Binding Tree.SetSectionCommand}" CommandParameter="{Binding Converter={StaticResource StringToTreeSectionConverter}, ConverterParameter=History}"
+                        IsChecked="{Binding Tree.ActiveSection, Converter={StaticResource SectionEqualsConverter}, ConverterParameter=History, Mode=OneWay}" ToolTip="Report history" Margin="0,4">
+            <TextBlock Style="{StaticResource RailIcon}" Text="&#xE81C;" />
+          </ToggleButton>
+        </StackPanel>
+      </Border>
+
+      <!-- ===== Left settings panel ===== -->
+      <Grid Grid.Column="1" Margin="12"
+            Visibility="{Binding Tree.IsLeftPanelVisible, Converter={StaticResource BoolToVisibilityConverter}}">
+          <!-- Extensions -->
+          <Grid Visibility="{Binding Tree.ActiveSection, Converter={StaticResource SectionEqualsConverter}, ConverterParameter=Extensions}">
+            <Grid.RowDefinitions>
+              <RowDefinition Height="Auto" />
+              <RowDefinition Height="Auto" />
+              <RowDefinition Height="Auto" />
+              <RowDefinition Height="*" />
+              <RowDefinition Height="Auto" />
+            </Grid.RowDefinitions>
+
+            <StackPanel Grid.Row="0" Orientation="Horizontal">
+              <TextBlock Style="{StaticResource SectionTitleText}" Margin="0" Text="EXTENSIONS" />
+              <CheckBox Margin="12,0,0,0" VerticalAlignment="Center" FontSize="12" Content="All" IsChecked="{Binding Formats.IncludeAllExtensions, Mode=TwoWay}" />
+            </StackPanel>
+
+            <Grid Grid.Row="1" Margin="0,10,0,0">
+              <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="Auto" />
+              </Grid.ColumnDefinitions>
+              <TextBox Grid.Column="0" Text="{Binding Formats.SearchText, UpdateSourceTrigger=PropertyChanged}" ToolTip="Filter extensions" />
+              <ComboBox Grid.Column="1" Margin="8,0,0,0"
+                        Width="92"
+                        ItemsSource="{x:Static local:FormatsViewModel.SortOptions}"
+                        SelectedItem="{Binding Formats.SortKey, Mode=TwoWay}"
+                        ToolTip="Sort by" />
+              <ComboBox Grid.Column="2" Margin="8,0,0,0"
+                        Width="100"
+                        ItemsSource="{x:Static local:FormatsViewModel.FilterOptions}"
+                        SelectedItem="{Binding Formats.FilterKey, Mode=TwoWay}"
+                        ToolTip="Show" />
+            </Grid>
+
+            <WrapPanel Grid.Row="2" Margin="0,8,0,0">
+              <Button Margin="0,0,6,0" Padding="8,2" FontSize="12" Command="{Binding Formats.EnableAllCommand}" Content="Enable all" />
+              <Button Margin="0,0,6,0" Padding="8,2" FontSize="12" Command="{Binding Formats.DisableAllCommand}" Content="Disable all" />
+              <Button Margin="0,0,6,0" Padding="8,2" FontSize="12" Command="{Binding Formats.InvertAllCommand}" Content="Invert" />
+              <Button Margin="0,0,6,0" Padding="8,2" FontSize="12" Command="{Binding Formats.EnableSelectedCommand}" Content="Enable selected" />
+              <Button Padding="8,2" FontSize="12" Command="{Binding Formats.DisableSelectedCommand}" Content="Disable selected" />
+            </WrapPanel>
+
+            <ListView x:Name="FormatsListView"
+                      Grid.Row="3"
+                      Margin="0,10,0,0"
+                      SelectionMode="Extended"
+                      ItemsSource="{Binding Formats.Rows}">
+              <ListView.View>
+                <GridView ColumnHeaderContainerStyle="{StaticResource GridHeaderStyle}">
+                  <GridViewColumn Width="44">
+                    <GridViewColumn.Header>
+                      <TextBlock Text="Use" />
+                    </GridViewColumn.Header>
+                    <GridViewColumn.CellTemplate>
+                      <DataTemplate>
+                        <CheckBox IsChecked="{Binding Enabled, Mode=TwoWay}" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                      </DataTemplate>
+                    </GridViewColumn.CellTemplate>
+                  </GridViewColumn>
+                  <GridViewColumn Width="130">
+                    <GridViewColumn.Header>
+                      <TextBlock Text="Extension" />
+                    </GridViewColumn.Header>
+                    <GridViewColumn.CellTemplate>
+                      <DataTemplate>
+                        <TextBlock FontFamily="Cascadia Code, Consolas" FontSize="12" VerticalAlignment="Center" Foreground="{DynamicResource TextPrimaryBrush}" Text="{Binding Extension}" TextTrimming="CharacterEllipsis" />
+                      </DataTemplate>
+                    </GridViewColumn.CellTemplate>
+                  </GridViewColumn>
+                  <GridViewColumn Width="56">
+                    <GridViewColumn.Header>
+                      <TextBlock Text="Files" />
+                    </GridViewColumn.Header>
+                    <GridViewColumn.CellTemplate>
+                      <DataTemplate>
+                        <TextBlock FontSize="12" HorizontalAlignment="Right" VerticalAlignment="Center" Foreground="{DynamicResource TextSecondaryBrush}" Text="{Binding Count, StringFormat={}{0:N0}}" />
+                      </DataTemplate>
+                    </GridViewColumn.CellTemplate>
+                  </GridViewColumn>
+                  <GridViewColumn Width="86">
+                    <GridViewColumn.Header>
+                      <TextBlock Text="Share" />
+                    </GridViewColumn.Header>
+                    <GridViewColumn.CellTemplate>
+                      <DataTemplate>
+                        <Rectangle Height="4"
+                                   RadiusX="2"
+                                   RadiusY="2"
+                                   VerticalAlignment="Center"
+                                   Fill="{DynamicResource AccentSoftBrush}"
+                                   Width="{Binding SizeShare, Converter={StaticResource ShareToWidthConverter}, ConverterParameter=70}" />
+                      </DataTemplate>
+                    </GridViewColumn.CellTemplate>
+                  </GridViewColumn>
+                  <GridViewColumn Width="64">
+                    <GridViewColumn.Header>
+                      <TextBlock Text="Size" />
+                    </GridViewColumn.Header>
+                    <GridViewColumn.CellTemplate>
+                      <DataTemplate>
+                        <TextBlock FontSize="11" HorizontalAlignment="Right" VerticalAlignment="Center" Foreground="{DynamicResource TextTertiaryBrush}" Text="{Binding SizeBytes, Converter={StaticResource LongToSizeConverter}}" />
+                      </DataTemplate>
+                    </GridViewColumn.CellTemplate>
+                  </GridViewColumn>
+                  <GridViewColumn Width="104">
+                    <GridViewColumn.Header>
+                      <TextBlock Text="Mode" />
+                    </GridViewColumn.Header>
+                    <GridViewColumn.CellTemplate>
+                      <DataTemplate>
+                        <ComboBox Height="28"
+                                  FontSize="12"
+                                  VerticalAlignment="Center"
+                                  ItemsSource="{Binding DataContext.CollectionModes, RelativeSource={RelativeSource AncestorType=Window}}"
+                                  SelectedItem="{Binding Mode, Mode=TwoWay}" />
+                      </DataTemplate>
+                    </GridViewColumn.CellTemplate>
+                  </GridViewColumn>
+                </GridView>
+              </ListView.View>
+            </ListView>
+
+            <TextBlock Grid.Row="4" Margin="0,8,0,0" Style="{StaticResource HintText}" Text="{Binding Formats.EffectSummary}" />
+          </Grid>
+
+          <!-- Filters -->
+          <ScrollViewer Grid.Row="0" Grid.RowSpan="5" VerticalScrollBarVisibility="Auto"
+                        Visibility="{Binding Tree.ActiveSection, Converter={StaticResource SectionEqualsConverter}, ConverterParameter=Filters}">
+            <StackPanel>
+              <TextBlock Style="{StaticResource SectionTitleText}" Margin="0,0,0,10" Text="FILTERS" />
+
+              <Border Style="{StaticResource Card}" Margin="0,0,0,10">
+                <DockPanel>
+                  <ToggleButton x:Name="CardVisibility" DockPanel.Dock="Top" IsChecked="True" Style="{StaticResource CardExpanderToggle}">
+                    <TextBlock Text="Visibility" Style="{StaticResource CardTitleText}" />
+                  </ToggleButton>
+                  <StackPanel Margin="8,2,8,6"
+                              Visibility="{Binding IsChecked, ElementName=CardVisibility, Converter={StaticResource BoolToVisibilityConverter}}">
+                    <CheckBox Content="Include hidden files" IsChecked="{Binding Filters.IncludeHidden, Mode=TwoWay}" />
+                    <CheckBox Content="Include system files" IsChecked="{Binding Filters.IncludeSystem, Mode=TwoWay}" />
+                    <CheckBox Content="Follow reparse points" IsChecked="{Binding Filters.FollowReparsePoints, Mode=TwoWay}" />
+                    <TextBlock Style="{StaticResource HintText}" Margin="42,0,0,0" Text="Reparse points may contain loops; visited directories are tracked, but they are skipped by default." />
+                  </StackPanel>
+                </DockPanel>
+              </Border>
+
+              <Border Style="{StaticResource Card}" Margin="0,0,0,10">
+                <DockPanel>
+                  <ToggleButton x:Name="CardSize" DockPanel.Dock="Top" IsChecked="True" Style="{StaticResource CardExpanderToggle}">
+                    <TextBlock Text="Size &amp; type" Style="{StaticResource CardTitleText}" />
+                  </ToggleButton>
+                  <StackPanel Margin="8,2,8,6"
+                              Visibility="{Binding IsChecked, ElementName=CardSize, Converter={StaticResource BoolToVisibilityConverter}}">
+                    <TextBlock Style="{StaticResource HintText}" Margin="0,0,0,4" Text="Maximum file size — larger files become Listed. The histogram shows the project file-size distribution." />
+                    <controls:SizeHistogram x:Name="SizeHistogramControl"
+                                            MaxKiB="{Binding Filters.HistogramMaxKiB, Mode=OneWay}"
+                                            Value="{Binding Filters.MaxFileSizeKiB, Mode=TwoWay}"
+                                            Buckets="{Binding Filters.HistogramBuckets, Mode=OneWay}" />
+                    <WrapPanel Margin="0,8,0,0">
+                      <Button Margin="0,0,6,0" Padding="8,2" FontSize="12" Content="512 KB" Command="{Binding Filters.SetMaxSizeCommand}" CommandParameter="{Binding Converter={StaticResource StringToDoubleConverter}, ConverterParameter=512}" />
+                      <Button Margin="0,0,6,0" Padding="8,2" FontSize="12" Content="1 MB" Command="{Binding Filters.SetMaxSizeCommand}" CommandParameter="{Binding Converter={StaticResource StringToDoubleConverter}, ConverterParameter=1024}" />
+                      <Button Margin="0,0,6,0" Padding="8,2" FontSize="12" Content="5 MB" Command="{Binding Filters.SetMaxSizeCommand}" CommandParameter="{Binding Converter={StaticResource StringToDoubleConverter}, ConverterParameter=5120}" />
+                      <Button Padding="8,2" FontSize="12" Content="10 MB" Command="{Binding Filters.SetMaxSizeCommand}" CommandParameter="{Binding Converter={StaticResource StringToDoubleConverter}, ConverterParameter=10240}" />
+                    </WrapPanel>
+                    <Grid Margin="0,10,0,0">
+                      <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="140" />
+                      </Grid.ColumnDefinitions>
+                      <TextBlock Grid.Column="0" VerticalAlignment="Center" FontSize="13" Text="Binary file mode:" />
+                      <ComboBox Grid.Column="1"
+                                ItemsSource="{Binding CollectionModes}"
+                                SelectedItem="{Binding Filters.BinaryFileMode, Mode=TwoWay}" />
+                    </Grid>
+                  </StackPanel>
+                </DockPanel>
+              </Border>
+
+              <Border Style="{StaticResource Card}" Margin="0,0,0,10">
+                <DockPanel>
+                  <ToggleButton x:Name="CardPatterns" DockPanel.Dock="Top" IsChecked="True" Style="{StaticResource CardExpanderToggle}">
+                    <TextBlock Text="Patterns" Style="{StaticResource CardTitleText}" />
+                  </ToggleButton>
+                  <StackPanel Margin="8,2,8,6"
+                              Visibility="{Binding IsChecked, ElementName=CardPatterns, Converter={StaticResource BoolToVisibilityConverter}}">
+                    <TextBlock Style="{StaticResource HintText}" Margin="0,0,0,6" Text="Glob patterns (* ? **). The count shows matches in the current inventory. Disabled patterns are ignored but kept." />
+                    <TextBlock Style="{StaticResource DetailLabelText}" Text="INCLUDE (when present, only matching files are collected)" />
+                    <controls:PatternEditor x:Name="IncludePatternEditor" Margin="0,0,0,10" />
+                    <TextBlock Style="{StaticResource DetailLabelText}" Text="EXCLUDE" />
+                    <controls:PatternEditor x:Name="ExcludePatternEditor" />
+                  </StackPanel>
+                </DockPanel>
+              </Border>
+
+              <Border Style="{StaticResource Card}" Margin="0,0,0,10">
+                <DockPanel>
+                  <ToggleButton x:Name="CardReport" DockPanel.Dock="Top" IsChecked="True" Style="{StaticResource CardExpanderToggle}">
+                    <TextBlock Text="Report output" Style="{StaticResource CardTitleText}" />
+                  </ToggleButton>
+                  <StackPanel Margin="8,2,8,6"
+                              Visibility="{Binding IsChecked, ElementName=CardReport, Converter={StaticResource BoolToVisibilityConverter}}">
+                    <CheckBox Content="Redact root path in output" IsChecked="{Binding Filters.RedactRootPath, Mode=TwoWay}" />
+                    <CheckBox Content="Include per-file YAML metadata blocks" IsChecked="{Binding Filters.IncludeFileMetadataBlocks, Mode=TwoWay}" />
+                    <TextBlock Style="{StaticResource HintText}" Margin="42,0,0,0" Text="Disabling the metadata blocks reduces the Markdown size and token usage; the full details stay in the manifest." />
+                  </StackPanel>
+                </DockPanel>
+              </Border>
+
+              <Border Style="{StaticResource Card}" Margin="0,0,0,10">
+                <DockPanel>
+                  <ToggleButton x:Name="CardInventory" DockPanel.Dock="Top" IsChecked="True" Style="{StaticResource CardExpanderToggle}">
+                    <TextBlock Text="Inventory" Style="{StaticResource CardTitleText}" />
+                  </ToggleButton>
+                  <StackPanel Margin="8,2,8,6"
+                              Visibility="{Binding IsChecked, ElementName=CardInventory, Converter={StaticResource BoolToVisibilityConverter}}">
+                    <Grid>
+                      <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="64" />
+                        <ColumnDefinition Width="Auto" />
+                      </Grid.ColumnDefinitions>
+                      <TextBlock Grid.Column="0" VerticalAlignment="Center" FontSize="13" Text="Auto refresh interval (minutes, 0 = off):" />
+                      <TextBox Grid.Column="1" Margin="8,0,0,0" Text="{Binding Filters.InventoryRefreshMinutes, UpdateSourceTrigger=PropertyChanged}" />
+                      <Button Grid.Column="2" Margin="8,0,0,0" Padding="8,2" FontSize="12" Content="Refresh now" Command="{Binding Root.RefreshInventoryCommand}" />
+                    </Grid>
+                    <TextBlock Style="{StaticResource HintText}" Margin="0,6,0,0" Text="{Binding Root.InventoryStatus}" />
+                    <TextBlock Style="{StaticResource HintText}" Margin="0,4,0,0" Text="A file-system watcher accelerates updates; the periodic refresh is the safety net." />
+                  </StackPanel>
+                </DockPanel>
+              </Border>
+            </StackPanel>
+          </ScrollViewer>
+
+          <!-- Prefix -->
+          <ScrollViewer VerticalScrollBarVisibility="Auto"
+                        Visibility="{Binding Tree.ActiveSection, Converter={StaticResource SectionEqualsConverter}, ConverterParameter=Prefix}">
+            <StackPanel>
+              <TextBlock Style="{StaticResource SectionTitleText}" Margin="0,0,0,10" Text="PREFIX" />
+              <Grid>
+                <Grid.ColumnDefinitions>
+                  <ColumnDefinition Width="*" />
+                  <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <ComboBox Grid.Column="0"
+                          ItemsSource="{Binding PrefixPresets.Items}"
+                          DisplayMemberPath="Name"
+                          SelectedValuePath="Id"
+                          SelectedValue="{Binding PrefixPresets.SelectedId, Mode=TwoWay}" />
+                <Button x:Name="PrefixMenuButton" Grid.Column="1" Margin="8,0,0,0" Padding="8,2" FontSize="12" Content="⋯" Click="OnPrefixMenuClick" ToolTip="Prefix preset actions" />
+              </Grid>
+              <Popup x:Name="PrefixPopup"
+                     PlacementTarget="{Binding ElementName=PrefixMenuButton}"
+                     Placement="Bottom"
+                     StaysOpen="False"
+                     AllowsTransparency="True"
+                     PopupAnimation="Fade">
+                <Border Margin="0,4,0,0"
+                        Padding="6"
+                        CornerRadius="8"
+                        MinWidth="190"
+                        Background="{DynamicResource SurfaceRaisedBrush}"
+                        BorderBrush="{DynamicResource BorderStrongBrush}"
+                        BorderThickness="1"
+                        Effect="{StaticResource PopupShadow}">
+                  <StackPanel MouseLeftButtonDown="OnPrefixPopupItemClicked">
+                    <Button Style="{StaticResource FlatMenuButton}" Content="New" Command="{Binding PrefixPresets.NewCommand}" />
+                    <Button Style="{StaticResource FlatMenuButton}" Content="Save" Command="{Binding PrefixPresets.SaveCommand}" />
+                    <Button Style="{StaticResource FlatMenuButton}" Content="Save as…" Command="{Binding PrefixPresets.SaveAsCommand}" />
+                    <Button Style="{StaticResource FlatMenuButton}" Content="Rename" Command="{Binding PrefixPresets.RenameCommand}" />
+                    <Button Style="{StaticResource FlatMenuButton}" Command="{Binding PrefixPresets.DeleteCommand}">
+                      <TextBlock Foreground="{DynamicResource ErrorBrush}" Text="Delete" />
+                    </Button>
+                    <Button Style="{StaticResource FlatMenuButton}" Content="Discard changes" Command="{Binding PrefixPresets.DiscardCommand}" />
+                  </StackPanel>
+                </Border>
+              </Popup>
+              <TextBlock Margin="0,8,0,0"
+                         FontSize="11"
+                         Foreground="{DynamicResource WarningBrush}"
+                         Text="Unsaved changes"
+                         Visibility="{Binding PrefixPresets.IsDirty, Converter={StaticResource BoolToVisibilityConverter}}" />
+              <TextBox Margin="0,8,0,0"
+                       Height="170"
+                       AcceptsReturn="True"
+                       TextWrapping="Wrap"
+                       VerticalScrollBarVisibility="Auto"
+                       VerticalContentAlignment="Top"
+                       FontFamily="Cascadia Code, Consolas"
+                       FontSize="12"
+                       IsEnabled="{Binding PrefixPresets.HasSelection}"
+                       Text="{Binding PrefixPresets.Content, UpdateSourceTrigger=PropertyChanged}" />
+              <Grid Margin="0,6,0,0">
+                <TextBlock FontSize="11" Foreground="{DynamicResource TextTertiaryBrush}" Text="{Binding PrefixPresets.ContentLength, StringFormat={}{0:N0} characters}" />
+                <Button HorizontalAlignment="Right" Padding="8,2" FontSize="12" Content="No prefix" Command="{Binding PrefixPresets.ClearSelectionCommand}" />
+              </Grid>
+              <Border Margin="0,8,0,0"
+                      Height="48"
+                      ClipToBounds="True"
+                      Background="{DynamicResource SurfaceAltBrush}"
+                      CornerRadius="6"
+                      Padding="8,6">
+                <TextBlock FontFamily="Cascadia Code, Consolas"
+                           FontSize="11"
+                           Foreground="{DynamicResource TextSecondaryBrush}"
+                           TextWrapping="Wrap"
+                           ToolTip="{Binding PrefixPresets.Content}"
+                           Text="{Binding PrefixPresets.Content}" />
+              </Border>
+              <TextBlock Style="{StaticResource HintText}" Margin="0,8,0,0" Text="The prefix is added to the start of the Markdown report. It does not affect traversal rules." />
+            </StackPanel>
+          </ScrollViewer>
+
+          <!-- Presets -->
+          <ScrollViewer VerticalScrollBarVisibility="Auto"
+                        Visibility="{Binding Tree.ActiveSection, Converter={StaticResource SectionEqualsConverter}, ConverterParameter=Presets}">
+            <StackPanel>
+              <Grid Margin="0,0,0,10">
+                <TextBlock Style="{StaticResource SectionTitleText}" Margin="0" Text="PRESETS" />
+                <Button HorizontalAlignment="Right" Padding="10,3" FontSize="12" Content="+ New" Command="{Binding Presets.NewPresetCommand}" />
+              </Grid>
+
+              <Border Style="{StaticResource Card}" Margin="0,0,0,12">
+                <StackPanel>
+                  <Grid>
+                    <StackPanel Orientation="Horizontal">
+                      <TextBlock Style="{StaticResource CardTitleText}" Text="{Binding Presets.ActivePresetName}" />
+                      <TextBlock Margin="6,0,0,0" FontSize="11" VerticalAlignment="Center" Foreground="{DynamicResource TextTertiaryBrush}" Text="(default)" Visibility="{Binding Presets.IsDefaultPreset, Converter={StaticResource BoolToVisibilityConverter}}" />
+                    </StackPanel>
+                    <Ellipse HorizontalAlignment="Right" Style="{StaticResource DirtyDot}" Visibility="{Binding Presets.IsDirty, Converter={StaticResource BoolToVisibilityConverter}}" />
+                  </Grid>
+                  <TextBlock Margin="0,6,0,0" FontSize="11" Foreground="{DynamicResource TextTertiaryBrush}" Text="{Binding Presets.UpdatedAtText, StringFormat=Updated {0}}" />
+                  <Grid Margin="0,10,0,0">
+                    <Grid.ColumnDefinitions>
+                      <ColumnDefinition Width="Auto" />
+                      <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+                    <Grid.RowDefinitions>
+                      <RowDefinition Height="Auto" />
+                      <RowDefinition Height="Auto" />
+                      <RowDefinition Height="Auto" />
+                      <RowDefinition Height="Auto" />
+                      <RowDefinition Height="Auto" />
+                      <RowDefinition Height="Auto" />
+                      <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
+                    <TextBlock Grid.Row="0" Grid.Column="0" FontSize="12" Foreground="{DynamicResource TextTertiaryBrush}" Text="Path rules" />
+                    <TextBlock Grid.Row="0" Grid.Column="1" FontSize="12" HorizontalAlignment="Right" Foreground="{DynamicResource TextPrimaryBrush}" Text="{Binding Presets.PathRuleCount, StringFormat={}{0:N0}}" />
+                    <TextBlock Grid.Row="1" Grid.Column="0" Margin="0,3,0,0" FontSize="12" Foreground="{DynamicResource TextTertiaryBrush}" Text="Extension rules" />
+                    <TextBlock Grid.Row="1" Grid.Column="1" Margin="0,3,0,0" FontSize="12" HorizontalAlignment="Right" Foreground="{DynamicResource TextPrimaryBrush}" Text="{Binding Presets.ExtensionRuleCount, StringFormat={}{0:N0}}" />
+                    <TextBlock Grid.Row="2" Grid.Column="0" Margin="0,3,0,0" FontSize="12" Foreground="{DynamicResource TextTertiaryBrush}" Text="Patterns" />
+                    <TextBlock Grid.Row="2" Grid.Column="1" Margin="0,3,0,0" FontSize="12" HorizontalAlignment="Right" Foreground="{DynamicResource TextPrimaryBrush}" Text="{Binding Presets.PatternCount, StringFormat={}{0:N0}}" />
+                    <TextBlock Grid.Row="3" Grid.Column="0" Margin="0,3,0,0" FontSize="12" Foreground="{DynamicResource TextTertiaryBrush}" Text="Max size" />
+                    <TextBlock Grid.Row="3" Grid.Column="1" Margin="0,3,0,0" FontSize="12" HorizontalAlignment="Right" Foreground="{DynamicResource TextPrimaryBrush}" Text="{Binding Presets.MaxSizeText}" />
+                    <TextBlock Grid.Row="4" Grid.Column="0" Margin="0,3,0,0" FontSize="12" Foreground="{DynamicResource TextTertiaryBrush}" Text="Binary mode" />
+                    <TextBlock Grid.Row="4" Grid.Column="1" Margin="0,3,0,0" FontSize="12" HorizontalAlignment="Right" Foreground="{DynamicResource TextPrimaryBrush}" Text="{Binding Presets.BinaryModeText}" />
+                    <TextBlock Grid.Row="5" Grid.Column="0" Margin="0,3,0,0" FontSize="12" Foreground="{DynamicResource TextTertiaryBrush}" Text="Scan root" />
+                    <TextBlock Grid.Row="5" Grid.Column="1" Margin="0,3,0,0" FontSize="12" HorizontalAlignment="Right" Foreground="{DynamicResource TextPrimaryBrush}" TextTrimming="CharacterEllipsis" ToolTip="{Binding Presets.ScanRootText}" Text="{Binding Presets.ScanRootText}" />
+                    <TextBlock Grid.Row="6" Grid.Column="0" Margin="0,3,0,0" FontSize="12" Foreground="{DynamicResource TextTertiaryBrush}" Text="Prefix" />
+                    <TextBlock Grid.Row="6" Grid.Column="1" Margin="0,3,0,0" FontSize="12" HorizontalAlignment="Right" Foreground="{DynamicResource TextPrimaryBrush}" Text="{Binding Presets.PrefixNameText}" />
+                  </Grid>
+                  <WrapPanel Margin="0,12,0,0">
+                    <Button Margin="0,0,6,6" Padding="10,3" FontSize="12" Content="Save" Command="{Binding Presets.SavePresetCommand}" />
+                    <Button Margin="0,0,6,6" Padding="10,3" FontSize="12" Content="Save as…" Command="{Binding Presets.SavePresetAsCommand}" />
+                    <Button Margin="0,0,6,6" Padding="10,3" FontSize="12" Content="Rename" Command="{Binding Presets.RenamePresetCommand}" />
+                    <Button Margin="0,0,6,6" Padding="10,3" FontSize="12" Content="Delete" Command="{Binding Presets.DeletePresetCommand}" />
+                    <Button Padding="10,3" FontSize="12" Content="Discard changes" Command="{Binding Presets.DiscardChangesCommand}" />
+                  </WrapPanel>
+                </StackPanel>
+              </Border>
+
+              <TextBlock Style="{StaticResource DetailLabelText}" Text="ALL PRESETS" />
+              <ItemsControl ItemsSource="{Binding Presets.PresetItems}">
+                <ItemsControl.ItemTemplate>
+                  <DataTemplate>
+                    <Button Style="{StaticResource FlatMenuButton}"
+                            Margin="0,1"
+                            Command="{Binding DataContext.Presets.SwitchPresetCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                            CommandParameter="{Binding}"
+                            ToolTip="Activate this preset">
+                      <Grid>
+                        <TextBlock Text="{Binding Name}" />
+                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                          <TextBlock FontSize="11" Foreground="{DynamicResource TextTertiaryBrush}" Text="(default)" Visibility="{Binding IsDefault, Converter={StaticResource BoolToVisibilityConverter}}" />
+                          <TextBlock FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="10" Margin="6,0,0,0" Foreground="{DynamicResource TextTertiaryBrush}" Text="&#xE76C;" />
+                        </StackPanel>
+                      </Grid>
+                    </Button>
+                  </DataTemplate>
+                </ItemsControl.ItemTemplate>
+              </ItemsControl>
+            </StackPanel>
+          </ScrollViewer>
+
+          <!-- History -->
+          <ScrollViewer VerticalScrollBarVisibility="Auto"
+                        Visibility="{Binding Tree.ActiveSection, Converter={StaticResource SectionEqualsConverter}, ConverterParameter=History}">
+            <StackPanel>
+              <Grid Margin="0,0,0,10">
+                <TextBlock Style="{StaticResource SectionTitleText}" Margin="0" Text="REPORT HISTORY" />
+                <Button HorizontalAlignment="Right" Padding="10,3" FontSize="12" Content="Refresh" Command="{Binding History.RefreshCommand}" />
+              </Grid>
+              <TextBlock Style="{StaticResource CaptionText}" Margin="0,0,0,8" Text="{Binding History.Summary}" />
+              <ItemsControl ItemsSource="{Binding History.Entries}">
+                <ItemsControl.ItemTemplate>
+                  <DataTemplate>
+                    <Border Style="{StaticResource Card}" Margin="0,0,0,8" Padding="10">
+                      <StackPanel>
+                        <Grid>
+                          <TextBlock FontSize="13" FontWeight="SemiBold" Foreground="{DynamicResource TextPrimaryBrush}" TextTrimming="CharacterEllipsis" ToolTip="{Binding ReportPath}" Text="{Binding Name}" />
+                          <TextBlock HorizontalAlignment="Right"
+                                     Margin="8,0,0,0"
+                                     FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                     FontSize="12"
+                                     VerticalAlignment="Center"
+                                     Foreground="{DynamicResource WarningBrush}"
+                                     Text="&#xE7BA;"
+                                     Visibility="{Binding DiagnosticsCount, Converter={StaticResource IntRangeToVisibilityConverter}}"
+                                     ToolTip="{Binding DiagnosticsCount, StringFormat={}{0:N0} diagnostic(s)}" />
+                        </Grid>
+                        <TextBlock Margin="0,4,0,0" FontSize="11" Foreground="{DynamicResource TextTertiaryBrush}" Text="{Binding CreatedAtText}" />
+                        <TextBlock Margin="0,2,0,0" FontSize="11" Foreground="{DynamicResource TextSecondaryBrush}" Text="{Binding CountsText}" Visibility="{Binding CountsText, Converter={StaticResource StringNullOrEmptyToVisibilityConverter}}" />
+                        <TextBlock Margin="0,2,0,6" FontSize="11" Foreground="{DynamicResource TextTertiaryBrush}" Text="{Binding SizeText}" />
+                        <StackPanel Orientation="Horizontal">
+                          <Button Padding="8,2" FontSize="12" Margin="0,0,6,0" Content="Open" Command="{Binding DataContext.History.OpenReportCommand, RelativeSource={RelativeSource AncestorType=Window}}" CommandParameter="{Binding}" />
+                          <Button Padding="8,2" FontSize="12" Margin="0,0,6,0" Content="Manifest" Command="{Binding DataContext.History.OpenManifestCommand, RelativeSource={RelativeSource AncestorType=Window}}" CommandParameter="{Binding}" Visibility="{Binding ManifestPath, Converter={StaticResource NullToVisibilityConverter}}" />
+                          <Button Padding="8,2" FontSize="12" Margin="0,0,6,0" Content="Folder" Command="{Binding DataContext.History.OpenFolderCommand, RelativeSource={RelativeSource AncestorType=Window}}" CommandParameter="{Binding}" />
+                          <Button Padding="8,2" FontSize="12" Content="Copy path" Command="{Binding DataContext.History.CopyPathCommand, RelativeSource={RelativeSource AncestorType=Window}}" CommandParameter="{Binding}" />
+                        </StackPanel>
+                      </StackPanel>
+                    </Border>
+                  </DataTemplate>
+                </ItemsControl.ItemTemplate>
+              </ItemsControl>
+            </StackPanel>
+          </ScrollViewer>
+      </Grid>
+
+      <GridSplitter Grid.Column="2"
+                    Width="5"
+                    HorizontalAlignment="Center"
+                    Background="Transparent"
+                    ResizeBehavior="PreviousAndNext"
+                    ResizeDirection="Columns"
+                    Visibility="{Binding Tree.IsLeftPanelVisible, Converter={StaticResource BoolToVisibilityConverter}}" />
+
+      <!-- ===== Center: file tree ===== -->
+      <Grid Grid.Column="3" Margin="10,8,10,8">
+        <Grid>
+          <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+          </Grid.RowDefinitions>
+
+          <!-- Toolbar: search + filter chips -->
+          <Grid Grid.Row="0" Margin="0,0,0,6">
+            <Grid.ColumnDefinitions>
+              <ColumnDefinition Width="220" />
+              <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+            <TextBox Grid.Column="0"
+                     FontSize="12"
+                     Text="{Binding Tree.SearchText, UpdateSourceTrigger=PropertyChanged}"
+                     ToolTip="Filter the loaded tree (Ctrl+K searches the whole inventory)" />
+            <WrapPanel Grid.Column="1" HorizontalAlignment="Right" VerticalAlignment="Center">
+              <ToggleButton Style="{StaticResource ChipButton}" Margin="0,0,6,0" Content="Files" IsChecked="{Binding Tree.ShowFiles, Mode=TwoWay}" />
+              <ToggleButton Style="{StaticResource ChipButton}" Margin="0,0,6,0" Content="Folders" IsChecked="{Binding Tree.ShowFolders, Mode=TwoWay}" />
+              <ToggleButton Style="{StaticResource ChipButton}" Margin="0,0,6,0" Content="Local rules" IsChecked="{Binding Tree.ShowLocalRulesOnly, Mode=TwoWay}" />
+              <ToggleButton Style="{StaticResource ChipButton}" Margin="0,0,6,0" Content="Excluded" IsChecked="{Binding Tree.ShowExcludedOnly, Mode=TwoWay}" />
+              <ToggleButton Style="{StaticResource ChipButton}" Margin="0,0,6,0" Content="&gt;1 MB" IsChecked="{Binding Tree.ShowLargeOnly, Mode=TwoWay}" />
+              <ToggleButton Style="{StaticResource ChipButton}" Margin="0,0,6,0" Content="Binary" IsChecked="{Binding Tree.ShowBinaryOnly, Mode=TwoWay}" />
+              <ToggleButton Style="{StaticResource ChipButton}" Content="No ext" IsChecked="{Binding Tree.ShowNoExtensionOnly, Mode=TwoWay}" />
+            </WrapPanel>
+          </Grid>
+
+          <!-- Bulk actions bar -->
+          <Border Grid.Row="1"
+                  Margin="0,0,0,6"
+                  Padding="10,5"
+                  CornerRadius="6"
+                  Background="{DynamicResource AccentSoftBrush}"
+                  BorderBrush="{DynamicResource AccentBrush}"
+                  BorderThickness="1"
+                  Visibility="{Binding Tree.HasMultiSelection, Converter={StaticResource BoolToVisibilityConverter}}">
+            <StackPanel Orientation="Horizontal">
+              <TextBlock VerticalAlignment="Center" FontSize="12" FontWeight="SemiBold" Foreground="{DynamicResource AccentSoftTextBrush}" Text="{Binding Tree.SelectedCount, StringFormat={}{0:N0} selected}" />
+              <Button Margin="12,0,4,0" Padding="8,2" FontSize="12" Content="Full" Command="{Binding Tree.BulkApplyModeCommand}" CommandParameter="{Binding Converter={StaticResource StringToCollectionModeConverter}, ConverterParameter=Full}" />
+              <Button Margin="4,0" Padding="8,2" FontSize="12" Content="Sig" Command="{Binding Tree.BulkApplyModeCommand}" CommandParameter="{Binding Converter={StaticResource StringToCollectionModeConverter}, ConverterParameter=Signatures}" />
+              <Button Margin="4,0" Padding="8,2" FontSize="12" Content="Listed" Command="{Binding Tree.BulkApplyModeCommand}" CommandParameter="{Binding Converter={StaticResource StringToCollectionModeConverter}, ConverterParameter=Listed}" />
+              <Button Margin="4,0" Padding="8,2" FontSize="12" Content="Excluded" Command="{Binding Tree.BulkApplyModeCommand}" CommandParameter="{Binding Converter={StaticResource StringToCollectionModeConverter}, ConverterParameter=Excluded}" />
+              <Button Margin="10,0,4,0" Padding="8,2" FontSize="12" Content="Reset" Command="{Binding Tree.BulkResetCommand}" />
+              <Button Padding="8,2" FontSize="12" Content="&#x2715;" Command="{Binding Tree.ClearMultiSelectionCommand}" ToolTip="Clear selection (Esc)" />
+            </StackPanel>
+          </Border>
+
+          <!-- Column headers -->
+          <Grid Grid.Row="2" Margin="3,0,8,2">
+            <Grid.ColumnDefinitions>
+              <ColumnDefinition Width="*" />
+              <ColumnDefinition Width="30" />
+              <ColumnDefinition Width="104" />
+              <ColumnDefinition Width="86" />
+            </Grid.ColumnDefinitions>
+            <TextBlock Grid.Column="1" FontSize="10" FontWeight="SemiBold" HorizontalAlignment="Center" Foreground="{DynamicResource TextTertiaryBrush}" Text="SRC" />
+            <TextBlock Grid.Column="2" FontSize="10" FontWeight="SemiBold" HorizontalAlignment="Right" Margin="0,0,8,0" Foreground="{DynamicResource TextTertiaryBrush}" Text="MODE" />
+            <TextBlock Grid.Column="3" FontSize="10" FontWeight="SemiBold" HorizontalAlignment="Right" Foreground="{DynamicResource TextTertiaryBrush}" Text="SIZE" />
+          </Grid>
+
+          <!-- Tree -->
+          <TreeView x:Name="FileTree"
+                    Grid.Row="3"
+                    BorderThickness="0"
+                    Background="Transparent"
+                    ItemsSource="{Binding Tree.RootNodes}"
+                    SelectedItemChanged="OnTreeSelectionChanged"
+                    TreeViewItem.Expanded="OnTreeViewItemExpanded"
+                    TreeViewItem.Collapsed="OnTreeViewItemCollapsed"
+                    PreviewMouseLeftButtonDown="OnTreePreviewMouseDown"
+                    PreviewMouseRightButtonDown="OnTreePreviewMouseRightButtonDown">
+            <TreeView.ItemContainerStyle>
+              <Style TargetType="TreeViewItem" BasedOn="{StaticResource FileTreeItemStyle}" />
+            </TreeView.ItemContainerStyle>
+            <TreeView.ContextMenu>
+              <ContextMenu>
+                <MenuItem Header="Full" InputGestureText="1" Tag="Full" Click="OnContextModeClick" />
+                <MenuItem Header="Signatures" InputGestureText="2" Tag="Signatures" Click="OnContextModeClick" />
+                <MenuItem Header="Listed" InputGestureText="3" Tag="Listed" Click="OnContextModeClick" />
+                <MenuItem Header="Excluded" InputGestureText="4" Tag="Excluded" Click="OnContextModeClick" />
+                <Separator />
+                <MenuItem Header="Reset local rule" Click="OnContextResetClick" />
+                <Separator />
+                <MenuItem Header="Include pattern from path" Click="OnContextIncludePatternClick" />
+                <MenuItem Header="Exclude pattern from path" Click="OnContextExcludePatternClick" />
+                <Separator />
+                <MenuItem Header="Open file" Click="OnContextOpenFileClick" />
+                <MenuItem Header="Reveal in Explorer" Click="OnContextRevealClick" />
+                <Separator />
+                <MenuItem Header="Copy path" Click="OnContextCopyPathClick" />
+                <MenuItem Header="Copy relative path" Click="OnContextCopyRelativePathClick" />
+              </ContextMenu>
+            </TreeView.ContextMenu>
+          </TreeView>
+        </Grid>
+
+        <!-- Onboarding overlay (topmost) -->
+        <Border Background="{DynamicResource WindowBackgroundBrush}"
+                VerticalAlignment="Center"
+                HorizontalAlignment="Center"
+                Width="460"
+                Visibility="{Binding Tree.IsOnboardingVisible, Converter={StaticResource BoolToVisibilityConverter}}">
+          <Border Style="{StaticResource Card}" Padding="24">
+            <StackPanel>
+              <TextBlock FontSize="18" FontWeight="SemiBold" Foreground="{DynamicResource TextPrimaryBrush}" Text="Collect a snapshot of a project" />
+              <TextBlock Style="{StaticResource CaptionText}" Margin="0,6,0,14" Text="Files Collector scans a folder tree, applies your rules and produces a Markdown report (for humans and LLMs) plus a JSON manifest." />
+              <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
+                <Border Width="22" Height="22" CornerRadius="11" Background="{DynamicResource AccentBrush}">
+                  <TextBlock Text="1" FontWeight="SemiBold" Foreground="{DynamicResource TextInverseBrush}" HorizontalAlignment="Center" VerticalAlignment="Center" FontSize="12" />
+                </Border>
+                <TextBlock Margin="8,0,0,0" VerticalAlignment="Center" FontSize="13" Text="Drop a folder onto this window (or choose one)" />
+              </StackPanel>
+              <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
+                <Border Width="22" Height="22" CornerRadius="11" Background="{DynamicResource AccentBrush}">
+                  <TextBlock Text="2" FontWeight="SemiBold" Foreground="{DynamicResource TextInverseBrush}" HorizontalAlignment="Center" VerticalAlignment="Center" FontSize="12" />
+                </Border>
+                <TextBlock Margin="8,0,0,0" VerticalAlignment="Center" FontSize="13" Text="Tune rules, formats and filters (optional)" />
+              </StackPanel>
+              <StackPanel Orientation="Horizontal" Margin="0,0,0,14">
+                <Border Width="22" Height="22" CornerRadius="11" Background="{DynamicResource AccentBrush}">
+                  <TextBlock Text="3" FontWeight="SemiBold" Foreground="{DynamicResource TextInverseBrush}" HorizontalAlignment="Center" VerticalAlignment="Center" FontSize="12" />
+                </Border>
+                <TextBlock Margin="8,0,0,0" VerticalAlignment="Center" FontSize="13" Text="Press Create report" />
+              </StackPanel>
+              <StackPanel Orientation="Horizontal" HorizontalAlignment="Left">
+                <Button Style="{StaticResource AccentButton}" Padding="14,6" Content="Choose folder" Command="{Binding Root.ChangeRootCommand}" />
+                <Button Margin="8,0,0,0" Padding="10,6" Content="Close" Command="{Binding CloseOnboardingCommand}" />
+              </StackPanel>
+            </StackPanel>
+          </Border>
+        </Border>
+      </Grid>
+
+      <GridSplitter Grid.Column="4"
+                    Width="5"
+                    HorizontalAlignment="Center"
+                    Background="Transparent"
+                    ResizeBehavior="PreviousAndNext"
+                    ResizeDirection="Columns"
+                    Visibility="{Binding Tree.IsRightPanelVisible, Converter={StaticResource BoolToVisibilityConverter}}" />
+
+      <!-- ===== Right: inspector ===== -->
+      <Border Grid.Column="5"
+              Background="{DynamicResource SurfaceBrush}"
+              BorderBrush="{DynamicResource BorderBrush}"
+              BorderThickness="1,0,0,0"
+              Visibility="{Binding Tree.IsRightPanelVisible, Converter={StaticResource BoolToVisibilityConverter}}">
+        <Grid Margin="12,10">
+          <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+          </Grid.RowDefinitions>
+
+          <!-- Inspector header -->
+          <Grid Grid.Row="0" Margin="0,0,0,10">
+            <Grid.ColumnDefinitions>
+              <ColumnDefinition Width="*" />
+              <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <Border Grid.Column="0" Background="{DynamicResource SurfaceAltBrush}" CornerRadius="8" Padding="3">
+              <Grid>
+                <Grid.ColumnDefinitions>
+                  <ColumnDefinition Width="*" />
+                  <ColumnDefinition Width="*" />
+                  <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+                <ToggleButton Grid.Column="0"
+                              Style="{StaticResource SegmentButton}"
+                              Margin="1"
+                              Content="Details"
+                              Command="{Binding Inspector.SetTabCommand}"
+                              CommandParameter="Details"
+                              IsChecked="{Binding Inspector.ActiveTab, Converter={StaticResource SectionEqualsConverter}, ConverterParameter=Details, Mode=OneWay}" />
+                <ToggleButton Grid.Column="1"
+                              Style="{StaticResource SegmentButton}"
+                              Margin="1"
+                              Content="Plan"
+                              Command="{Binding Inspector.SetTabCommand}"
+                              CommandParameter="Plan"
+                              IsChecked="{Binding Inspector.ActiveTab, Converter={StaticResource SectionEqualsConverter}, ConverterParameter=Plan, Mode=OneWay}" />
+                <ToggleButton Grid.Column="2"
+                              Style="{StaticResource SegmentButton}"
+                              Margin="1"
+                              Content="Preview"
+                              Command="{Binding Inspector.SetTabCommand}"
+                              CommandParameter="Preview"
+                              IsChecked="{Binding Inspector.ActiveTab, Converter={StaticResource SectionEqualsConverter}, ConverterParameter=Preview, Mode=OneWay}" />
+              </Grid>
+            </Border>
+            <StackPanel Grid.Column="1" Orientation="Horizontal" Margin="6,0,0,0">
+              <Button Style="{StaticResource IconButton}" Width="28" Height="28" FontSize="13" Content="&#xE740;" ToolTip="Full screen" Command="{Binding ExpandInspectorCommand}" IsEnabled="{Binding Inspector.CanExpand}" />
+              <Button Style="{StaticResource IconButton}" Width="28" Height="28" FontSize="13" Content="&#xE711;" ToolTip="Hide inspector (Ctrl+J)" Command="{Binding ToggleRightPanelCommand}" />
+            </StackPanel>
+          </Grid>
+
+          <!-- Inspector content -->
+          <Grid Grid.Row="1">
+            <inspector:DetailsView DataContext="{Binding Inspector}"
+                                   Visibility="{Binding Inspector.ActiveTab, Converter={StaticResource SectionEqualsConverter}, ConverterParameter=Details}" />
+            <inspector:PlanView DataContext="{Binding Inspector}"
+                                Visibility="{Binding Inspector.ActiveTab, Converter={StaticResource SectionEqualsConverter}, ConverterParameter=Plan}" />
+            <inspector:PreviewView DataContext="{Binding Inspector}"
+                                   Visibility="{Binding Inspector.ActiveTab, Converter={StaticResource SectionEqualsConverter}, ConverterParameter=Preview}" />
+          </Grid>
+        </Grid>
+      </Border>
+
+      <!-- ===== Full-screen plan/preview overlay ===== -->
+      <Border Grid.Column="3"
+              Background="{DynamicResource WindowBackgroundBrush}"
+              Visibility="{Binding IsInspectorExpanded, Converter={StaticResource BoolToVisibilityConverter}}">
+        <Grid Margin="16,10">
+          <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+          </Grid.RowDefinitions>
+          <Grid Grid.Row="0" Margin="0,0,0,10">
+            <Grid.ColumnDefinitions>
+              <ColumnDefinition Width="*" />
+              <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
+              <TextBlock FontSize="15" FontWeight="SemiBold" Foreground="{DynamicResource TextPrimaryBrush}"
+                         Text="Plan"
+                         Visibility="{Binding Inspector.ActiveTab, Converter={StaticResource SectionEqualsConverter}, ConverterParameter=Plan}" />
+              <TextBlock FontSize="15" FontWeight="SemiBold" Foreground="{DynamicResource TextPrimaryBrush}"
+                         Text="Preview"
+                         Visibility="{Binding Inspector.ActiveTab, Converter={StaticResource SectionEqualsConverter}, ConverterParameter=Preview}" />
+            </StackPanel>
+            <Button Grid.Column="1" Padding="10,3" Content="Close (Esc)" Command="{Binding CollapseInspectorCommand}" />
+          </Grid>
+          <inspector:PlanView Grid.Row="1"
+                              Margin="0,0,16,0"
+                              DataContext="{Binding Inspector}"
+                              Visibility="{Binding Inspector.ActiveTab, Converter={StaticResource SectionEqualsConverter}, ConverterParameter=Plan}" />
+          <inspector:PreviewView Grid.Row="1"
+                                 Margin="0,0,16,0"
+                                 DataContext="{Binding Inspector}"
+                                 Visibility="{Binding Inspector.ActiveTab, Converter={StaticResource SectionEqualsConverter}, ConverterParameter=Preview}" />
+        </Grid>
+      </Border>
+    </Grid>
+
+    <!-- ================= Plan strip ================= -->
+    <Border Grid.Row="3" Background="{DynamicResource SurfaceBrush}" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,1,0,0" Padding="12,6">
+      <Grid>
+        <Grid.ColumnDefinitions>
+          <ColumnDefinition Width="Auto" />
+          <ColumnDefinition Width="Auto" />
+          <ColumnDefinition Width="*" />
+          <ColumnDefinition Width="Auto" />
+        </Grid.ColumnDefinitions>
+
+        <TextBlock Grid.Column="0"
+                   FontSize="11"
+                   VerticalAlignment="Center"
+                   MaxWidth="180"
+                   TextTrimming="CharacterEllipsis"
+                   Foreground="{DynamicResource TextTertiaryBrush}"
+                   Text="{Binding StatusText}"
+                   ToolTip="{Binding StatusText}" />
+
+        <StackPanel Grid.Column="1" Orientation="Horizontal" Margin="16,0,0,0">
+          <StackPanel Orientation="Horizontal" Margin="0,0,12,0">
+            <Ellipse Width="7" Height="7" VerticalAlignment="Center" Fill="{DynamicResource ModeFullBrush}" />
+            <TextBlock Margin="5,0,0,0" VerticalAlignment="Center" FontSize="11" FontWeight="SemiBold" Foreground="{DynamicResource ModeFullBrush}" Text="Full" />
+            <TextBlock Margin="5,0,0,0" VerticalAlignment="Center" FontSize="11" Foreground="{DynamicResource TextSecondaryBrush}" Text="{Binding Inspector.Plan.FullCount, StringFormat={}{0:N0}}" />
+            <TextBlock Margin="4,0,0,0" VerticalAlignment="Center" FontSize="11" Foreground="{DynamicResource TextTertiaryBrush}" Text="{Binding Inspector.Plan.FullSizeText}" />
+          </StackPanel>
+          <StackPanel Orientation="Horizontal" Margin="0,0,12,0">
+            <Ellipse Width="7" Height="7" VerticalAlignment="Center" Fill="{DynamicResource ModeSignaturesBrush}" />
+            <TextBlock Margin="5,0,0,0" VerticalAlignment="Center" FontSize="11" FontWeight="SemiBold" Foreground="{DynamicResource ModeSignaturesBrush}" Text="Sig" />
+            <TextBlock Margin="5,0,0,0" VerticalAlignment="Center" FontSize="11" Foreground="{DynamicResource TextSecondaryBrush}" Text="{Binding Inspector.Plan.SignaturesCount, StringFormat={}{0:N0}}" />
+            <TextBlock Margin="4,0,0,0" VerticalAlignment="Center" FontSize="11" Foreground="{DynamicResource TextTertiaryBrush}" Text="{Binding Inspector.Plan.SignaturesSizeText}" />
+          </StackPanel>
+          <StackPanel Orientation="Horizontal" Margin="0,0,12,0">
+            <Ellipse Width="7" Height="7" VerticalAlignment="Center" Fill="{DynamicResource ModeListedBrush}" />
+            <TextBlock Margin="5,0,0,0" VerticalAlignment="Center" FontSize="11" FontWeight="SemiBold" Foreground="{DynamicResource ModeListedBrush}" Text="Listed" />
+            <TextBlock Margin="5,0,0,0" VerticalAlignment="Center" FontSize="11" Foreground="{DynamicResource TextSecondaryBrush}" Text="{Binding Inspector.Plan.ListedCount, StringFormat={}{0:N0}}" />
+          </StackPanel>
+          <StackPanel Orientation="Horizontal" Margin="0,0,12,0">
+            <Ellipse Width="7" Height="7" VerticalAlignment="Center" Fill="{DynamicResource ModeExcludedBrush}" />
+            <TextBlock Margin="5,0,0,0" VerticalAlignment="Center" FontSize="11" FontWeight="SemiBold" Foreground="{DynamicResource ModeExcludedBrush}" Text="Excl" />
+            <TextBlock Margin="5,0,0,0" VerticalAlignment="Center" FontSize="11" Foreground="{DynamicResource TextSecondaryBrush}" Text="{Binding Inspector.Plan.ExcludedCount, StringFormat={}{0:N0}}" />
+          </StackPanel>
+          <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+            <TextBlock FontSize="12" FontWeight="SemiBold" VerticalAlignment="Center" Foreground="{DynamicResource TextPrimaryBrush}" Text="{Binding Inspector.Plan.EstimatedBytesText}" />
+            <TextBlock Margin="8,0,0,0" FontSize="11" VerticalAlignment="Center" Foreground="{DynamicResource TextSecondaryBrush}" Text="{Binding Inspector.Plan.TokensText}" />
+            <TextBlock FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="13" Margin="8,0,0,0" VerticalAlignment="Center" Foreground="{DynamicResource WarningBrush}" Text="&#xE7BA;" Visibility="{Binding Inspector.Plan.IsLargeWarning, Converter={StaticResource BoolToVisibilityConverter}}" ToolTip="Large report warning" />
+          </StackPanel>
+        </StackPanel>
+
+        <Grid Grid.Column="3" HorizontalAlignment="Right">
+          <!-- Idle: last report -->
+          <Button Style="{StaticResource GhostButton}"
+                  Padding="8,2"
+                  FontSize="11"
+                  HorizontalAlignment="Right"
+                  VerticalAlignment="Center"
+                  Command="{Binding OpenOutputCommand}"
+                  Visibility="{Binding IsGeneratingReport, Converter={StaticResource InverseBoolToVisibilityConverter}}"
+                  ToolTip="Open the last created report">
+            <TextBlock Text="{Binding LastReportName, StringFormat=Last: {0}}" Foreground="{DynamicResource TextTertiaryBrush}" />
+          </Button>
+          <!-- Generating -->
+          <StackPanel Orientation="Horizontal"
+                      VerticalAlignment="Center"
+                      Visibility="{Binding IsGeneratingReport, Converter={StaticResource BoolToVisibilityConverter}}">
+            <ProgressBar Width="160"
+                         Height="5"
+                         Maximum="{Binding GenerationTotal, FallbackValue=1}"
+                         Value="{Binding GenerationCompleted}" />
+            <TextBlock Margin="10,0,0,0"
+                       MaxWidth="260"
+                       TextTrimming="CharacterEllipsis"
+                       FontSize="11"
+                       VerticalAlignment="Center"
+                       Foreground="{DynamicResource TextSecondaryBrush}">
+              <MultiBinding StringFormat="{}{0:N0}/{1:N0}  ·  {2}">
+                <Binding Path="GenerationCompleted" />
+                <Binding Path="GenerationTotal" />
+                <Binding Path="GenerationCurrentPath" />
+              </MultiBinding>
+            </TextBlock>
+          </StackPanel>
+        </Grid>
+      </Grid>
+    </Border>
+
+    <!-- ================= Toasts ================= -->
+    <toasts:ToastHost Grid.Row="0"
+                      Grid.RowSpan="4"
+                      DataContext="{Binding Toasts}"
+                      Focusable="False" />
+
+    <!-- ================= Command palette ================= -->
+    <Grid x:Name="PaletteOverlay"
+          Grid.Row="0"
+          Grid.RowSpan="4"
+          Background="{DynamicResource OverlayBrush}"
+          Visibility="{Binding IsPaletteOpen, Converter={StaticResource BoolToVisibilityConverter}}"
+          MouseLeftButtonDown="OnPaletteBackdropClick">
+      <Border Width="640"
+              MaxWidth="0.8"
+              HorizontalAlignment="Center"
+              VerticalAlignment="Top"
+              Margin="0,110,0,0"
+              CornerRadius="10"
+              Background="{DynamicResource SurfaceRaisedBrush}"
+              BorderBrush="{DynamicResource BorderStrongBrush}"
+              BorderThickness="1"
+              Effect="{StaticResource PopupShadow}">
+        <StackPanel Margin="10">
+          <Grid Margin="0,0,0,8">
+            <TextBox x:Name="PaletteBox"
+                     FontSize="14"
+                     Padding="10,8"
+                     TextChanged="OnPaletteBoxTextChanged"
+                     PreviewKeyDown="OnPaletteBoxKeyDown"
+                     ToolTip="Type a command or a file path" />
+          </Grid>
+          <ListBox x:Name="PaletteList"
+                   Height="320"
+                   BorderThickness="0"
+                   Background="Transparent"
+                   ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                   ItemTemplate="{StaticResource PaletteEntryTemplate}"
+                   ItemsSource="{Binding Palette.Entries}"
+                   SelectedItem="{Binding Palette.SelectedEntry, Mode=TwoWay}"
+                   PreviewKeyDown="OnPaletteListKeyDown">
+            <ListBox.ItemContainerStyle>
+              <Style TargetType="ListBoxItem">
+                <Setter Property="Padding" Value="8,4" />
+                <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+              </Style>
+            </ListBox.ItemContainerStyle>
+          </ListBox>
+          <TextBlock Margin="8,6" Style="{StaticResource HintText}" Text="↑↓ navigate · Enter run · Esc close" />
+        </StackPanel>
+      </Border>
+    </Grid>
+  </Grid>
 </Window>

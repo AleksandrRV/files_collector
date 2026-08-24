@@ -1,9 +1,10 @@
 using System.Windows;
 using System.Windows.Threading;
+using FilesCollector.App.History;
 using FilesCollector.Core;
-using FilesCollector.Infrastructure;
-using FilesCollector.Extractors;
 using FilesCollector.Core.Signatures;
+using FilesCollector.Extractors;
+using FilesCollector.Infrastructure;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -20,6 +21,12 @@ public partial class App : Application
         try
         {
             _serviceProvider = ConfigureServices();
+            var uiSettings = _serviceProvider.GetRequiredService<UiSettingsStore>();
+
+            // Apply the persisted appearance before the window is shown.
+            ThemeManager.ApplyTheme(uiSettings.Settings.Theme);
+            ThemeManager.ApplyDensity(uiSettings.Settings.Density);
+
             ConfigureExceptionHandling(_serviceProvider.GetRequiredService<ILogger<App>>());
             var mainWindow = _serviceProvider.GetRequiredService<MainWindow>();
             MainWindow = mainWindow;
@@ -39,18 +46,21 @@ public partial class App : Application
         base.OnExit(e);
     }
 
-    private static ServiceProvider ConfigureServices()
+    private ServiceProvider ConfigureServices()
     {
         var services = new ServiceCollection();
         var executablePath = Environment.ProcessPath ?? throw new InvalidOperationException("The process path could not be determined.");
         var appPaths = new AppPaths(executablePath);
         var fileLoggerProvider = new FileLoggerProvider(appPaths.LogsDirectory, DateTimeOffset.Now);
+        var uiSettingsStore = new UiSettingsStore(appPaths);
 
         services.AddFilesCollectorInfrastructure(executablePath);
         services.AddSingleton<ISignatureExtractor, CSharpSignatureExtractor>();
         services.AddSingleton<ISignatureExtractor, JavaScriptTypeScriptSignatureExtractor>();
         services.AddSingleton<ISignatureExtractor, PythonSignatureExtractor>();
         services.AddSingleton<ISignatureExtractor, StructuredDataSignatureExtractor>();
+        services.AddSingleton<IReportHistoryStore, ReportHistoryStore>();
+        services.AddSingleton(uiSettingsStore);
         services.AddLogging(builder => builder.AddProvider(fileLoggerProvider));
         services.AddSingleton<PrefixPresetsViewModel>();
         services.AddSingleton<MainWindowViewModel>();
@@ -71,7 +81,7 @@ public partial class App : Application
 
         AppDomain.CurrentDomain.UnhandledException += (_, args) =>
         {
-            var exception = args.ExceptionObject as Exception ?? new InvalidOperationException("An unknown unhandled exception occurred.");
+            var exception = args.ExceptionObject as Exception ?? new InvalidOperationException("An unknown application-domain exception occurred.");
             logger.LogCritical(exception, "An unhandled application-domain exception occurred.");
         };
 
@@ -97,6 +107,7 @@ public partial class App : Application
         }
         catch (Exception)
         {
+            // Logging a startup failure is best-effort.
         }
     }
 

@@ -1,10 +1,35 @@
 <Application x:Class="FilesCollector.App.App"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:local="clr-namespace:FilesCollector.App">
   <Application.Resources>
-    <Style TargetType="Window">
-      <Setter Property="FontFamily" Value="Segoe UI" />
-      <Setter Property="FontSize" Value="14" />
-    </Style>
+    <ResourceDictionary>
+      <ResourceDictionary.MergedDictionaries>
+        <ResourceDictionary Source="Themes/Theme.Light.xaml" />
+        <ResourceDictionary Source="Themes/Theme.Density.Comfortable.xaml" />
+        <ResourceDictionary Source="Themes/Controls.xaml" />
+        <ResourceDictionary Source="Themes/Typography.xaml" />
+      </ResourceDictionary.MergedDictionaries>
+
+      <local:BoolToVisibilityConverter x:Key="BoolToVisibilityConverter" />
+      <local:InverseBoolToVisibilityConverter x:Key="InverseBoolToVisibilityConverter" />
+      <local:StringNullOrEmptyToVisibilityConverter x:Key="StringNullOrEmptyToVisibilityConverter" />
+      <local:NullToVisibilityConverter x:Key="NullToVisibilityConverter" />
+      <local:BoolToGridLengthConverter x:Key="BoolToGridLengthConverter" />
+      <local:ShareToWidthConverter x:Key="ShareToWidthConverter" />
+      <local:ShareToStarConverter x:Key="ShareToStarConverter" />
+      <local:SectionEqualsConverter x:Key="SectionEqualsConverter" />
+      <local:SourceGlyphToBrushConverter x:Key="SourceGlyphToBrushConverter" />
+      <local:ModeToBrushConverter x:Key="ModeToBrushConverter" />
+      <local:ModeToSoftBrushConverter x:Key="ModeToSoftBrushConverter" />
+      <local:ModeToShortTextConverter x:Key="ModeToShortTextConverter" />
+      <local:IntRangeToVisibilityConverter x:Key="IntRangeToVisibilityConverter" />
+      <local:RatioToHeightConverter x:Key="RatioToHeightConverter" Factor="52" />
+      <local:LongToSizeConverter x:Key="LongToSizeConverter" />
+      <local:StringToCollectionModeConverter x:Key="StringToCollectionModeConverter" />
+      <local:StringToTreeSectionConverter x:Key="StringToTreeSectionConverter" />
+      <local:StringToInspectorTabConverter x:Key="StringToInspectorTabConverter" />
+      <local:StringToDoubleConverter x:Key="StringToDoubleConverter" />
+    </ResourceDictionary>
   </Application.Resources>
 </Application>

@@ -1,0 +1,12 @@
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+  <!-- Compact density -->
+
+  <sys:Double x:Key="TreeRowHeight" xmlns:sys="clr-namespace:System;assembly=mscorlib" Value="24" />
+  <sys:Double x:Key="CardPadding" xmlns:sys="clr-namespace:System;assembly=mscorlib" Value="8" />
+  <sys:Double x:Key="PanelPadding" xmlns:sys="clr-namespace:System;assembly=mscorlib" Value="10" />
+  <sys:Double x:Key="ChipHeight" xmlns:sys="clr-namespace:System;assembly=mscorlib" Value="22" />
+  <sys:Double x:Key="InputHeight" xmlns:sys="clr-namespace:System;assembly=mscorlib" Value="28" />
+
+</ResourceDictionary>

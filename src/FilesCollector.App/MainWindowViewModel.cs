@@ -1,5 +1,9 @@
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using FilesCollector.App.History;
+using FilesCollector.App.Inspector;
+using FilesCollector.App.Palette;
+using FilesCollector.App.Toasts;
 using FilesCollector.Core;
 using FilesCollector.Core.FileSystem;
 using FilesCollector.Core.Inventory;
@@ -21,7 +25,11 @@ public sealed partial class MainWindowViewModel : ObservableObject
     private readonly IReportWriter _reportWriter;
     private readonly IPresetRepository _presetRepository;
     private readonly IAppSessionStore _appSessionStore;
+    private readonly IReportHistoryStore _historyStore;
+    private readonly UiSettingsStore _uiSettings;
     private readonly RuleSet _ruleSet = new();
+    private readonly SynchronizationContext _uiContext;
+
     private Preset _activePreset = null!;
     private PresetState _savedPresetState = null!;
     private string? _excludedDirectoryPath;
@@ -30,13 +38,21 @@ public sealed partial class MainWindowViewModel : ObservableObject
     private bool _suppressFilterChanges;
     private CollectionPlan? _currentPlan;
     private FileInventorySnapshot? _inventorySnapshot;
+    private Dictionary<string, CollectionPlanItem> _planItemsByPath = new(StringComparer.OrdinalIgnoreCase);
+    private Dictionary<string, (int Count, long SizeBytes)> _folderAggregates = new(StringComparer.OrdinalIgnoreCase);
+    private List<ExtensionRow> _extensionRows = [];
     private CancellationTokenSource? _inventoryRefreshCancellation;
+    private CancellationTokenSource? _generationCancellation;
     private Timer? _inventoryRefreshTimer;
     private Timer? _searchDebounceTimer;
     private Timer? _filterDebounceTimer;
+    private Timer? _formatSearchDebounceTimer;
+    private Timer? _paletteDebounceTimer;
     private FileSystemWatcher? _inventoryWatcher;
     private Timer? _watcherDebounceTimer;
-    private readonly SynchronizationContext _uiContext;
+    private (string Label, Action Undo)? _lastUndo;
+    private TreeSection _lastNonExplorerSection = TreeSection.Filters;
+    private bool _firstInventoryLoaded;
 
     public MainWindowViewModel(
         IAppPaths appPaths,
@@ -47,7 +63,9 @@ public sealed partial class MainWindowViewModel : ObservableObject
         IReportWriter reportWriter,
         IPresetRepository presetRepository,
         IAppSessionStore appSessionStore,
-        PrefixPresetsViewModel prefixPresets)
+        PrefixPresetsViewModel prefixPresets,
+        IReportHistoryStore historyStore,
+        UiSettingsStore uiSettings)
     {
         _uiContext = SynchronizationContext.Current ?? new SynchronizationContext();
         _appPaths = appPaths;
@@ -58,10 +76,24 @@ public sealed partial class MainWindowViewModel : ObservableObject
         _reportWriter = reportWriter;
         _presetRepository = presetRepository;
         _appSessionStore = appSessionStore;
+        _historyStore = historyStore;
+        _uiSettings = uiSettings;
         PrefixPresets = prefixPresets;
-        PrefixPresets.StateChanged += OnPrefixPresetStateChanged;
-        ScanRoot = string.Empty;
+        Root = new RootViewModel();
+        Presets = new PresetsViewModel();
+        Formats = new FormatsViewModel();
+        Filters = new FiltersViewModel();
+        Tree = new TreeViewModel();
+        Inspector = new InspectorViewModel();
+        History = new HistoryViewModel();
+        Palette = new PaletteViewModel();
+        Toasts = new ToastService();
+
         StatusText = "Ready.";
+        IsPortable = _appPaths.IsPortableMode;
+
+        WireViewModels();
+
         LoadPresetList();
         var lastPreset = _appSessionStore.GetLastPresetId() is { } lastPresetId
             ? _presetRepository.Get(lastPresetId)
@@ -72,15 +104,28 @@ public sealed partial class MainWindowViewModel : ObservableObject
             : _scanRootProvider.GetDefaultRoot();
         SetRoot(startupRoot);
         ResetPresetDirtyState();
+        UpdateOnboarding();
     }
 
-    public ObservableCollection<FileTreeNode> RootNodes { get; } = [];
+    public RootViewModel Root { get; }
+
+    public PresetsViewModel Presets { get; }
+
+    public FormatsViewModel Formats { get; }
+
+    public FiltersViewModel Filters { get; }
+
+    public TreeViewModel Tree { get; }
+
+    public InspectorViewModel Inspector { get; }
+
+    public HistoryViewModel History { get; }
+
+    public PaletteViewModel Palette { get; }
+
+    public ToastService Toasts { get; }
 
     public PrefixPresetsViewModel PrefixPresets { get; }
-
-    public ObservableCollection<PresetListItem> PresetItems { get; } = [];
-
-    public ObservableCollection<ExtensionRuleItem> ExtensionRuleItems { get; } = [];
 
     public IReadOnlyList<CollectionMode> CollectionModes { get; } = Enum.GetValues<CollectionMode>();
 
@@ -90,186 +135,48 @@ public sealed partial class MainWindowViewModel : ObservableObject
 
     public string StorageMode => _appPaths.IsPortableMode ? "Portable" : "Local application data";
 
-    public int RuleCount => _ruleSet.Rules.Count;
+    public string OutputsDirectory => _appPaths.OutputsDirectory;
 
-    [ObservableProperty]
-    private string scanRoot;
+    public string DataDirectory => _appPaths.LocalDataDirectory;
 
-    [ObservableProperty]
-    private string searchText = string.Empty;
-
-    [ObservableProperty]
-    private bool showFiles = true;
-
-    [ObservableProperty]
-    private bool showFolders = true;
-
-    [ObservableProperty]
-    private bool showLocalRulesOnly;
-
-    [ObservableProperty]
-    private bool showExcludedOnly;
-
-    [ObservableProperty]
-    private string selectedNodeDetails = "Select a file or folder to view details.";
+    public string DocumentationPath => Path.Combine(_appPaths.DocumentationDirectory, "FILES_COLLECTOR_DOCUMENTATION.md");
 
     [ObservableProperty]
     private string statusText;
 
     [ObservableProperty]
-    [NotifyCanExecuteChangedFor(nameof(ApplySelectedModeCommand))]
-    [NotifyCanExecuteChangedFor(nameof(ResetLocalRuleCommand))]
-    private FileTreeNode? selectedNode;
+    private bool isPortable;
 
     [ObservableProperty]
-    private CollectionMode selectedMode = CollectionMode.Full;
-
-    [ObservableProperty]
-    private Guid selectedPresetId;
-
-    [ObservableProperty]
-    private string activePresetName = string.Empty;
-
-    [ObservableProperty]
-    private bool isPresetDirty;
-
-    [ObservableProperty]
-    private string planSummary = "Plan not calculated.";
-
-    [ObservableProperty]
-    [NotifyCanExecuteChangedFor(nameof(RefreshInventoryCommand))]
-    private bool isRefreshingInventory;
-
-    [ObservableProperty]
-    private string inventoryStatus = "Inventory is not loaded.";
-
-    [ObservableProperty]
-    private int inventoryRefreshMinutes = 1;
-
-    [ObservableProperty]
-    private string previewText = "Refresh the plan to preview the report structure.";
-
-    [ObservableProperty]
-    [NotifyCanExecuteChangedFor(nameof(GenerateReportCommand))]
     private bool isGeneratingReport;
 
     [ObservableProperty]
-    private string generationStatus = "No report has been created.";
+    private int generationCompleted;
+
+    [ObservableProperty]
+    private int generationTotal;
+
+    [ObservableProperty]
+    private string generationCurrentPath = string.Empty;
 
     [ObservableProperty]
     private string? lastOutputPath;
 
     [ObservableProperty]
-    private bool includeAllExtensions = true;
+    private string lastReportName = string.Empty;
 
     [ObservableProperty]
-    private bool includeHidden;
+    private bool isInspectorExpanded;
 
     [ObservableProperty]
-    private bool includeSystem;
+    private bool isPaletteOpen;
 
-    [ObservableProperty]
-    private bool followReparsePoints;
-
-    [ObservableProperty]
-    private string includePatternsText = string.Empty;
-
-    [ObservableProperty]
-    private string excludePatternsText = string.Empty;
-
-    [ObservableProperty]
-    private int maxFileSizeKiB = 5120;
-
-    [ObservableProperty]
-    private CollectionMode binaryFileMode = CollectionMode.Listed;
-
-    [ObservableProperty]
-    private bool redactRootPath;
-
-    [ObservableProperty]
-    private bool includeFileMetadataBlocks = true;
-
-    [ObservableProperty]
-    [NotifyCanExecuteChangedFor(nameof(RenamePresetCommand))]
-    [NotifyCanExecuteChangedFor(nameof(DeletePresetCommand))]
-    private bool isDefaultPreset;
+    // ===== Commands (window level) =====
 
     [RelayCommand]
     private void ShowAbout()
     {
         AboutRequested?.Invoke(this, EventArgs.Empty);
-    }
-
-    [RelayCommand]
-    private void RequestRootChange()
-    {
-        RootChangeRequested?.Invoke(this, EventArgs.Empty);
-    }
-
-    [RelayCommand]
-    private void Reload()
-    {
-        if (!string.IsNullOrWhiteSpace(ScanRoot))
-        {
-            SetRoot(ScanRoot);
-        }
-    }
-
-    [RelayCommand]
-    private void RefreshPlan()
-    {
-        UpdatePlan();
-    }
-
-    [RelayCommand(CanExecute = nameof(CanRefreshInventory), IncludeCancelCommand = true)]
-    private async Task RefreshInventory(CancellationToken cancellationToken)
-    {
-        if (string.IsNullOrWhiteSpace(ScanRoot) || !Directory.Exists(ScanRoot))
-        {
-            InventoryStatus = "Inventory cannot be refreshed because the scan root is unavailable.";
-            return;
-        }
-
-        _inventoryRefreshCancellation?.Cancel();
-        _inventoryRefreshCancellation?.Dispose();
-        _inventoryRefreshCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        IsRefreshingInventory = true;
-        InventoryStatus = "Refreshing inventory...";
-        var rootPath = ScanRoot;
-        var excludedDirectoryPath = _excludedDirectoryPath;
-        var progress = new Progress<InventoryRefreshProgress>(value =>
-        {
-            InventoryStatus = $"Inventory: {value.DiscoveredFiles} files, {value.DiscoveredDirectories} folders";
-        });
-
-        try
-        {
-            var snapshot = await Task.Run(
-                () => _inventoryStore.Refresh(rootPath, excludedDirectoryPath, progress, _inventoryRefreshCancellation.Token),
-                _inventoryRefreshCancellation.Token);
-            if (string.Equals(ScanRoot, rootPath, StringComparison.OrdinalIgnoreCase))
-            {
-                _inventorySnapshot = snapshot;
-                InventoryStatus = $"Inventory updated: {snapshot.Files.Count} files";
-                UpdatePlan();
-            }
-        }
-        catch (OperationCanceledException)
-        {
-            InventoryStatus = "Inventory refresh canceled.";
-        }
-        catch (IOException exception)
-        {
-            InventoryStatus = $"Inventory refresh failed: {exception.Message}";
-        }
-        catch (UnauthorizedAccessException exception)
-        {
-            InventoryStatus = $"Inventory refresh failed: {exception.Message}";
-        }
-        finally
-        {
-            IsRefreshingInventory = false;
-        }
     }
 
     [RelayCommand(CanExecute = nameof(CanGenerateReport), IncludeCancelCommand = true)]
@@ -278,19 +185,27 @@ public sealed partial class MainWindowViewModel : ObservableObject
         UpdatePlan();
         if (_currentPlan is null)
         {
-            GenerationStatus = "The report plan is not available.";
+            Toasts.ShowWarning("The report plan is not available yet.");
             return;
         }
 
+        _generationCancellation?.Cancel();
+        _generationCancellation?.Dispose();
+        _generationCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         IsGeneratingReport = true;
-        GenerationStatus = "Preparing report generation...";
+        GenerationCompleted = 0;
+        GenerationTotal = _currentPlan.Items.Count;
+        GenerationCurrentPath = string.Empty;
         var progress = new Progress<ReportGenerationProgress>(value =>
         {
-            GenerationStatus = $"Processing {value.CompletedFiles}/{value.TotalFiles}: {value.CurrentPath}";
+            GenerationCompleted = value.CompletedFiles;
+            GenerationTotal = value.TotalFiles;
+            GenerationCurrentPath = value.CurrentPath;
         });
+
         var request = new ReportGenerationRequest(
-            ScanRoot,
-            ActivePresetName,
+            Root.ScanRoot,
+            Presets.ActivePresetName,
             PrefixPresets.SelectedName,
             PrefixPresets.Content,
             _activePreset.ScanOptions.RedactRootPath,
@@ -299,21 +214,37 @@ public sealed partial class MainWindowViewModel : ObservableObject
 
         try
         {
-            var result = await Task.Run(() => _reportWriter.Write(request, progress, cancellationToken), cancellationToken);
+            var result = await Task.Run(() => _reportWriter.Write(request, progress, _generationCancellation.Token), _generationCancellation.Token);
             LastOutputPath = result.ReportPath;
-            GenerationStatus = $"Report created: {Path.GetFileName(result.ReportPath)}";
+            LastReportName = Path.GetFileName(result.ReportPath);
+            Toasts.ShowSuccess(
+                "Report created",
+                $"{result.FullCount:N0} full · {result.SignaturesCount:N0} signatures · {result.ListedCount:N0} listed · {result.ExcludedCount:N0} excluded",
+                "Open report",
+                () => OutputOpenRequested?.Invoke(this, result.ReportPath),
+                "Open outputs",
+                () => OutputOpenRequested?.Invoke(this, _appPaths.OutputsDirectory));
+            RefreshHistory();
+            try
+            {
+                Inspector.Plan.SetDiagnostics(_historyStore.GetDiagnosticsGroups(result.ManifestPath), Path.GetFileName(result.ReportPath));
+            }
+            catch (Exception)
+            {
+                // Diagnostics are a nice-to-have; never fail generation because of them.
+            }
         }
         catch (OperationCanceledException)
         {
-            GenerationStatus = "Report generation canceled.";
+            Toasts.Show("Report generation canceled.");
         }
         catch (IOException exception)
         {
-            GenerationStatus = $"Report generation failed: {exception.Message}";
+            Toasts.ShowError("Report generation failed.", exception.Message);
         }
         catch (UnauthorizedAccessException exception)
         {
-            GenerationStatus = $"Report generation failed: {exception.Message}";
+            Toasts.ShowError("Report generation failed.", exception.Message);
         }
         finally
         {
@@ -337,148 +268,72 @@ public sealed partial class MainWindowViewModel : ObservableObject
         OutputOpenRequested?.Invoke(this, _appPaths.OutputsDirectory);
     }
 
-    [RelayCommand(CanExecute = nameof(CanApplyRule))]
-    private void ApplySelectedMode()
+    [RelayCommand]
+    private void OpenPalette()
     {
-        ApplyMode(SelectedMode);
-    }
-
-    [RelayCommand(CanExecute = nameof(CanResetLocalRule))]
-    private void ResetLocalRule()
-    {
-        if (SelectedNode is null)
-        {
-            return;
-        }
-
-        var removed = _ruleSet.RemoveRule(SelectedNode.RelativePath, GetRuleKind(SelectedNode));
-        if (!removed)
-        {
-            StatusText = "The selected item has no local rule.";
-            return;
-        }
-
-        RefreshRulePresentation();
-        OnPropertyChanged(nameof(RuleCount));
-        ResetLocalRuleCommand.NotifyCanExecuteChanged();
-        UpdateDirtyState();
-        UpdatePlan();
-        StatusText = $"Local rule reset: {SelectedNode.DisplayName}";
+        Palette.Open();
     }
 
     [RelayCommand]
-    private void NewPreset()
+    private void ClosePalette()
     {
-        var name = RequestPresetName("New preset", "Preset name:", string.Empty);
-        if (name is null)
-        {
-            return;
-        }
-
-        var validationError = ValidatePresetName(name, null);
-        if (validationError is not null)
-        {
-            StatusText = validationError;
-            return;
-        }
-
-        var now = DateTimeOffset.Now;
-        var preset = new Preset
-        {
-            Id = Guid.NewGuid(),
-            Name = name.Trim(),
-            CreatedAt = now,
-            UpdatedAt = now,
-            GlobalMode = CollectionMode.Full,
-            ExtensionRules = [],
-            PathRules = [],
-            ScanOptions = new ScanOptions(),
-            ScanRootPath = ScanRoot,
-            PrefixPresetId = PrefixPresets.SelectedId
-        };
-        _presetRepository.Save(preset);
-        LoadPresetList();
-        ActivatePreset(_presetRepository.Get(preset.Id) ?? preset);
-        RefreshRulePresentation();
-        StatusText = $"Preset created: {preset.Name}";
+        Palette.Close();
     }
 
     [RelayCommand]
-    private void SavePreset()
+    private void ToggleTheme()
     {
-        SaveCurrentPreset();
+        ThemeToggleRequested?.Invoke(this, EventArgs.Empty);
     }
 
     [RelayCommand]
-    private void SavePresetAs()
+    private void ToggleDensity()
     {
-        var name = RequestPresetName("Save preset as", "New preset name:", ActivePresetName);
-        if (name is null)
-        {
-            return;
-        }
-
-        var validationError = ValidatePresetName(name, null);
-        if (validationError is not null)
-        {
-            StatusText = validationError;
-            return;
-        }
-
-        var now = DateTimeOffset.Now;
-        var preset = CreateCurrentPreset(Guid.NewGuid(), name.Trim(), now, now);
-        _presetRepository.Save(preset);
-        LoadPresetList();
-        ActivatePreset(_presetRepository.Get(preset.Id) ?? preset);
-        StatusText = $"Preset saved as: {preset.Name}";
+        DensityToggleRequested?.Invoke(this, EventArgs.Empty);
     }
 
-    [RelayCommand(CanExecute = nameof(CanRenamePreset))]
-    private void RenamePreset()
+    [RelayCommand]
+    private void ToggleLeftPanel()
     {
-        var name = RequestPresetName("Rename preset", "Preset name:", ActivePresetName);
-        if (name is null)
+        if (Tree.ActiveSection == TreeSection.Explorer)
         {
-            return;
+            Tree.SetSectionCommand.Execute(_lastNonExplorerSection);
         }
-
-        var validationError = ValidatePresetName(name, _activePreset.Id);
-        if (validationError is not null)
+        else
         {
-            StatusText = validationError;
-            return;
-        }
-
-        _activePreset.Name = name.Trim();
-        SaveCurrentPreset();
-    }
-
-    [RelayCommand(CanExecute = nameof(CanDeletePreset))]
-    private void DeletePreset()
-    {
-        var request = new UnsavedChangesRequestEventArgs(ActivePresetName);
-        DeletePresetRequested?.Invoke(this, request);
-        if (request.Decision != UnsavedChangesDecision.Discard)
-        {
-            return;
-        }
-
-        if (_presetRepository.Delete(_activePreset.Id))
-        {
-            LoadPresetList();
-            ActivatePreset(GetDefaultPreset());
-            RefreshRulePresentation();
-            StatusText = "Preset deleted.";
+            Tree.SetSectionCommand.Execute(TreeSection.Explorer);
         }
     }
 
     [RelayCommand]
-    private void DiscardPresetChanges()
+    private void ToggleRightPanel()
     {
-        ActivatePreset(_presetRepository.Get(_activePreset.Id) ?? GetDefaultPreset());
-        RefreshRulePresentation();
-        StatusText = "Unsaved preset changes discarded.";
+        Tree.IsRightPanelVisible = !Tree.IsRightPanelVisible;
     }
+
+    [RelayCommand]
+    private void ExpandInspector()
+    {
+        if (Inspector.ActiveTab != InspectorTab.Details)
+        {
+            IsInspectorExpanded = true;
+        }
+    }
+
+    [RelayCommand]
+    private void CollapseInspector()
+    {
+        IsInspectorExpanded = false;
+    }
+
+    [RelayCommand]
+    private void CloseOnboarding()
+    {
+        PersistOnboardingSeen();
+        UpdateOnboarding();
+    }
+
+    // ===== Public API for the window =====
 
     public event EventHandler? AboutRequested;
 
@@ -492,13 +347,23 @@ public sealed partial class MainWindowViewModel : ObservableObject
 
     public event EventHandler<string>? OutputOpenRequested;
 
+    public event EventHandler<FileTreeNode>? RevealRequested;
+
+    public event EventHandler? ThemeToggleRequested;
+
+    public event EventHandler? DensityToggleRequested;
+
     public void Shutdown()
     {
         _inventoryRefreshCancellation?.Cancel();
         _inventoryRefreshCancellation?.Dispose();
+        _generationCancellation?.Cancel();
+        _generationCancellation?.Dispose();
         _inventoryRefreshTimer?.Dispose();
         _searchDebounceTimer?.Dispose();
         _filterDebounceTimer?.Dispose();
+        _formatSearchDebounceTimer?.Dispose();
+        _paletteDebounceTimer?.Dispose();
         _inventoryWatcher?.Dispose();
         _watcherDebounceTimer?.Dispose();
     }
@@ -511,16 +376,23 @@ public sealed partial class MainWindowViewModel : ObservableObject
         if (!Directory.Exists(normalizedRootPath))
         {
             StatusText = "The selected scan root does not exist.";
+            Toasts.ShowError("The selected scan root does not exist.", normalizedRootPath);
             return;
         }
 
-        ScanRoot = normalizedRootPath;
-        if (_activePreset is not null)
+        Root.ScanRoot = normalizedRootPath;
+        Root.HasUsableRoot = true;
+        Root.BreadcrumbSegments.Clear();
+        foreach (var segment in BuildBreadcrumbSegments(normalizedRootPath))
         {
-            UpdateDirtyState();
+            Root.BreadcrumbSegments.Add(segment);
         }
-        RootNodes.Clear();
-        SelectedNode = null;
+
+        _activePreset.ScanRootPath = normalizedRootPath;
+        UpdateDirtyState();
+        Tree.SelectedNode = null;
+        Inspector.SelectedNode = null;
+        UnloadAllNodes();
 
         if (IsApplicationDirectory(normalizedRootPath))
         {
@@ -534,18 +406,19 @@ public sealed partial class MainWindowViewModel : ObservableObject
             : null;
 
         _inventorySnapshot = _inventoryStore.Load(normalizedRootPath);
-        InventoryStatus = _inventorySnapshot is null
+        Root.InventoryStatus = _inventorySnapshot is null
             ? "Inventory cache is unavailable. Refresh has been scheduled."
-            : $"Inventory cache loaded: {_inventorySnapshot.Files.Count} files";
+            : $"Inventory cache loaded: {_inventorySnapshot.Files.Count:N0} files";
         var rootNode = FileTreeNode.CreateRoot(normalizedRootPath);
         ApplyRuleResolution(rootNode);
-        RootNodes.Add(rootNode);
+        AddRootNode(rootNode);
         LoadChildren(rootNode);
         UpdatePlan();
         ConfigureInventoryRefreshTimer();
         ConfigureInventoryWatcher();
         _ = RefreshInventory(CancellationToken.None);
         StatusText = $"Scan root loaded: {normalizedRootPath}";
+        UpdateOnboarding();
     }
 
     public void LoadChildren(FileTreeNode? node)
@@ -562,7 +435,9 @@ public sealed partial class MainWindowViewModel : ObservableObject
         foreach (var entry in result.Entries)
         {
             var child = FileTreeNode.FromEntry(entry, GetRelativePath(entry.FullPath));
+            child.Parent = node;
             ApplyRuleResolution(child);
+            ApplyPlanData(child);
             if (child.IsDirectory && child.IsAccessible && !child.IsReparsePoint)
             {
                 child.MarkChildrenUnloaded();
@@ -582,125 +457,577 @@ public sealed partial class MainWindowViewModel : ObservableObject
         StatusText = $"Loaded {result.Entries.Count} item(s) from {node.FullPath}";
     }
 
-    public void ApplyMode(CollectionMode mode)
+    public void ApplyModeToNodes(IEnumerable<FileTreeNode> nodes, CollectionMode mode)
     {
-        if (!CanApplyRule())
+        var targets = nodes.Where(node => node is not null and not { IsPlaceholder: true }).ToList();
+        if (targets.Count == 0)
         {
             return;
         }
 
-        var node = SelectedNode!;
-        _ruleSet.SetRule(node.RelativePath, GetRuleKind(node), mode);
-        SelectedMode = mode;
+        var previousRules = new List<(FileTreeNode Node, PathRule? Previous)>();
+        foreach (var node in targets)
+        {
+            var kind = GetRuleKind(node);
+            var previous = _ruleSet.Rules.LastOrDefault(rule => rule.Kind == kind && string.Equals(rule.RelativePath, node.RelativePath, StringComparison.OrdinalIgnoreCase));
+            previousRules.Add((node, previous));
+            _ruleSet.SetRule(node.RelativePath, kind, mode);
+        }
+
         RefreshRulePresentation();
-        OnPropertyChanged(nameof(RuleCount));
-        ResetLocalRuleCommand.NotifyCanExecuteChanged();
-        UpdateDirtyState();
         UpdatePlan();
-        StatusText = node.IsDirectory
-            ? $"Directory rule applied recursively: {node.DisplayName} → {GetModeText(mode)}"
-            : $"File rule applied: {node.DisplayName} → {GetModeText(mode)}";
-    }
+        UpdateDirtyState();
+        UpdatePresetsCard();
 
-    partial void OnLastOutputPathChanged(string? value)
-    {
-        OpenOutputCommand.NotifyCanExecuteChanged();
-    }
-
-    partial void OnSearchTextChanged(string value)
-    {
-        _searchDebounceTimer?.Dispose();
-        _searchDebounceTimer = new Timer(_ =>
+        var changed = targets.Count;
+        RegisterUndo($"Rule applied to {changed} item(s)", () =>
         {
-            _uiContext.Post(_ => ApplyTreeFilter(), null);
-        }, null, TimeSpan.FromMilliseconds(250), Timeout.InfiniteTimeSpan);
-    }
+            foreach (var (node, previous) in previousRules)
+            {
+                if (previous is null)
+                {
+                    _ruleSet.RemoveRule(node.RelativePath, GetRuleKind(node));
+                }
+                else
+                {
+                    _ruleSet.SetRule(node.RelativePath, previous.Kind, previous.Mode);
+                }
+            }
 
-    partial void OnShowFilesChanged(bool value)
-    {
-        ApplyTreeFilter();
-    }
+            RefreshRulePresentation();
+            UpdatePlan();
+            UpdateDirtyState();
+            UpdatePresetsCard();
+        });
 
-    partial void OnShowFoldersChanged(bool value)
-    {
-        ApplyTreeFilter();
-    }
-
-    partial void OnShowLocalRulesOnlyChanged(bool value)
-    {
-        ApplyTreeFilter();
-    }
-
-    partial void OnShowExcludedOnlyChanged(bool value)
-    {
-        ApplyTreeFilter();
-    }
-
-    partial void OnSelectedNodeChanged(FileTreeNode? value)
-    {
-        ApplySelectedModeCommand.NotifyCanExecuteChanged();
-        ResetLocalRuleCommand.NotifyCanExecuteChanged();
-
-        if (value is not null && !value.IsPlaceholder)
+        if (targets.Count == 1)
         {
-            SelectedMode = value.EffectiveMode;
-            StatusText = value.ToolTipText;
-            SelectedNodeDetails = $"Path: {value.RelativePath}{Environment.NewLine}Mode: {value.EffectiveModeText}{Environment.NewLine}Source: {value.RuleSourceText}{Environment.NewLine}Status: {value.StatusText}";
+            var node = targets[0];
+            StatusText = node.IsDirectory
+                ? $"Directory rule applied recursively: {node.DisplayName} → {mode}"
+                : $"File rule applied: {node.DisplayName} → {mode}";
+            Toasts.Show($"{node.DisplayName} → {mode}", node.IsDirectory ? "The rule applies to the whole folder." : null, ToastKind.Info, "Undo", RunUndo);
         }
         else
         {
-            SelectedNodeDetails = "Select a file or folder to view details.";
+            StatusText = $"Rule applied to {changed} item(s) → {mode}";
+            Toasts.Show($"{changed} item(s) → {mode}", null, ToastKind.Info, "Undo", RunUndo);
         }
     }
 
-    partial void OnSelectedPresetIdChanged(Guid value)
+    public void ResetLocalRuleFor(FileTreeNode? node)
     {
-        if (!_suppressPresetSelection && value != Guid.Empty && value != _activePreset.Id)
+        if (node is null || node.IsPlaceholder)
         {
-            TrySwitchPreset(value);
+            return;
+        }
+
+        var kind = GetRuleKind(node);
+        var previous = _ruleSet.Rules.LastOrDefault(rule => rule.Kind == kind && string.Equals(rule.RelativePath, node.RelativePath, StringComparison.OrdinalIgnoreCase));
+        var removed = _ruleSet.RemoveRule(node.RelativePath, kind);
+        if (!removed)
+        {
+            StatusText = "The selected item has no local rule.";
+            return;
+        }
+
+        RefreshRulePresentation();
+        UpdatePlan();
+        UpdateDirtyState();
+        UpdatePresetsCard();
+        StatusText = $"Local rule reset: {node.DisplayName}";
+        if (previous is not null)
+        {
+            RegisterUndo($"Rule reset on {node.DisplayName}", () =>
+            {
+                _ruleSet.SetRule(previous.RelativePath, previous.Kind, previous.Mode);
+                RefreshRulePresentation();
+                UpdatePlan();
+                UpdateDirtyState();
+                UpdatePresetsCard();
+            });
+            Toasts.Show($"Local rule reset: {node.DisplayName}", null, ToastKind.Info, "Undo", RunUndo);
         }
     }
 
-    private bool CanRefreshInventory()
+    public void AddPattern(bool isInclude, string pattern)
     {
-        return !IsRefreshingInventory && !string.IsNullOrWhiteSpace(ScanRoot) && Directory.Exists(ScanRoot);
+        var trimmed = pattern.Trim();
+        if (trimmed.Length == 0)
+        {
+            return;
+        }
+
+        var collection = isInclude ? Filters.IncludePatterns : Filters.ExcludePatterns;
+        if (collection.Any(item => string.Equals(item.Text, trimmed, StringComparison.OrdinalIgnoreCase)))
+        {
+            return;
+        }
+
+        var item = new Patterns.PatternItem(trimmed);
+        collection.Add(item);
+        Filters.UpdateHasActivePatterns();
+        ApplyFilterChanges();
+        RegisterUndo($"Pattern added: {trimmed}", () =>
+        {
+            collection.Remove(item);
+            Filters.UpdateHasActivePatterns();
+            ApplyFilterChanges();
+        });
+        Toasts.Show($"Pattern added: {trimmed}", null, ToastKind.Info, "Undo", RunUndo);
     }
 
-    private bool CanGenerateReport()
+    public void RemovePattern(bool isInclude, Patterns.PatternItem item)
     {
-        return !IsGeneratingReport && _currentPlan is not null;
+        var collection = isInclude ? Filters.IncludePatterns : Filters.ExcludePatterns;
+        var index = collection.IndexOf(item);
+        if (index < 0)
+        {
+            return;
+        }
+
+        collection.RemoveAt(index);
+        Filters.UpdateHasActivePatterns();
+        ApplyFilterChanges();
+        RegisterUndo($"Pattern removed: {item.Text}", () =>
+        {
+            collection.Insert(Math.Min(index, collection.Count), item);
+            Filters.UpdateHasActivePatterns();
+            ApplyFilterChanges();
+        });
+        Toasts.Show($"Pattern removed: {item.Text}", null, ToastKind.Info, "Undo", RunUndo);
     }
 
-    private bool CanOpenOutput()
+    public void TogglePattern(bool isInclude, Patterns.PatternItem item)
     {
-        return !string.IsNullOrWhiteSpace(LastOutputPath) && File.Exists(LastOutputPath);
+        var wasEnabled = item.IsEnabled;
+        item.IsEnabled = !wasEnabled;
+        Filters.UpdateHasActivePatterns();
+        ApplyFilterChanges();
+        RegisterUndo($"Pattern {wasEnabled ? "disabled" : "enabled"}: {item.Text}", () =>
+        {
+            item.IsEnabled = wasEnabled;
+            Filters.UpdateHasActivePatterns();
+            ApplyFilterChanges();
+        });
     }
 
-    private bool CanApplyRule()
+    public void BulkSetExtensionsEnabled(IReadOnlyList<ExtensionRow> rows, bool enable)
     {
-        return SelectedNode is { IsPlaceholder: false };
+        foreach (var row in rows)
+        {
+            row.Enabled = enable;
+        }
+
+        ApplyExtensionChanges();
     }
 
-    private bool CanResetLocalRule()
+    public void BulkSetExtensionsMode(IReadOnlyList<ExtensionRow> rows, CollectionMode mode)
     {
-        return SelectedNode is { IsPlaceholder: false, HasLocalRule: true };
+        foreach (var row in rows)
+        {
+            row.Mode = mode;
+            row.Enabled = true;
+        }
+
+        ApplyExtensionChanges();
     }
 
-    private bool CanRenamePreset()
+    public bool TryRevealInTree(string relativePath)
     {
-        return !IsDefaultPreset;
+        if (string.IsNullOrWhiteSpace(relativePath))
+        {
+            return false;
+        }
+
+        var normalized = RuleSet.NormalizeRelativePath(relativePath);
+        var segments = normalized.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        FileTreeNode? current = null;
+        foreach (var rootNode in GetRootNodes())
+        {
+            current = FindNodeBySegments(rootNode, segments, 0);
+            if (current is not null)
+            {
+                break;
+            }
+        }
+
+        if (current is null)
+        {
+            return false;
+        }
+
+        RevealRequested?.Invoke(this, current);
+        return true;
     }
 
-    private bool CanDeletePreset()
+    public void RefreshHistory()
     {
-        return !IsDefaultPreset;
+        History.SetEntries(_historyStore.GetEntries(_appPaths.OutputsDirectory));
+    }
+
+    // ===== ViewModel wiring =====
+
+    private void WireViewModels()
+    {
+        Root.RootChangeRequested += (_, _) => RootChangeRequested?.Invoke(this, EventArgs.Empty);
+        Root.TreeReloadRequested += (_, _) =>
+        {
+            if (!string.IsNullOrWhiteSpace(Root.ScanRoot))
+            {
+                SetRoot(Root.ScanRoot);
+            }
+        };
+        Root.InventoryRefreshRequested += (_, _) => _ = RefreshInventory(CancellationToken.None);
+        Root.SegmentActivated += (_, path) => SetRoot(path);
+
+        Presets.NewPresetRequested += OnNewPresetRequested;
+        Presets.SavePresetRequested += (_, _) => { SaveCurrentPreset(); };
+        Presets.SavePresetAsRequested += OnSavePresetAsRequested;
+        Presets.RenamePresetRequested += OnRenamePresetRequested;
+        Presets.DeletePresetRequested += OnDeletePresetRequested;
+        Presets.DiscardChangesRequested += (_, _) =>
+        {
+            ActivatePreset(_presetRepository.Get(_activePreset.Id) ?? GetDefaultPreset());
+            RefreshRulePresentation();
+            UpdatePlan();
+            StatusText = "Unsaved preset changes discarded.";
+        };
+        Presets.SwitchPresetRequested += (_, id) => TrySwitchPreset(id);
+
+        Formats.RowChanged += OnExtensionRowChanged;
+        Formats.EnableAllRequested += (_, _) => { SetAllExtensionsEnabled(true); ApplyExtensionChanges(); };
+        Formats.DisableAllRequested += (_, _) => { SetAllExtensionsEnabled(false); ApplyExtensionChanges(); };
+        Formats.InvertRequested += (_, _) =>
+        {
+            foreach (var row in _extensionRows)
+            {
+                row.Enabled = !row.Enabled;
+            }
+
+            ApplyExtensionChanges();
+        };
+        Formats.PropertyChanged += OnFormatsPropertyChange;
+
+        Filters.PropertyChanged += OnFiltersPropertyChange;
+
+        Tree.FiltersChanged += (_, _) => ApplyTreeFilter();
+        Tree.PropertyChanged += OnTreePropertyChange;
+        Tree.BulkApplyModeRequested += (_, mode) =>
+        {
+            var nodes = Tree.MultiSelected.ToList();
+            Tree.SetMultiSelection([]);
+            ApplyModeToNodes(nodes, mode);
+        };
+        Tree.BulkResetRequested += (_, _) =>
+        {
+            var nodes = Tree.MultiSelected.ToList();
+            Tree.SetMultiSelection([]);
+            foreach (var node in nodes)
+            {
+                ResetLocalRuleFor(node);
+            }
+        };
+        Tree.ClearMultiSelectionRequested += (_, _) => Tree.SetMultiSelection([]);
+        Tree.ToggleLeftPanelRequested += (_, _) => ToggleLeftPanelCommand.Execute(null);
+        Tree.ToggleRightPanelRequested += (_, _) => ToggleRightPanelCommand.Execute(null);
+        Tree.CloseOnboardingRequested += (_, _) =>
+        {
+            PersistOnboardingSeen();
+            UpdateOnboarding();
+        };
+
+        Inspector.ApplyModeRequested += (_, mode) =>
+        {
+            if (Inspector.SelectedNode is { } node)
+            {
+                ApplyModeToNodes([node], mode);
+            }
+        };
+        Inspector.ResetLocalRuleRequested += (_, _) => ResetLocalRuleFor(Inspector.SelectedNode);
+        Inspector.RevealInTreeRequested += (_, path) => { TryRevealInTree(path); };
+        Inspector.PreviewRefreshRequested += (_, _) => UpdatePreview();
+
+        History.RefreshRequested += (_, _) => RefreshHistory();
+        History.OpenReportRequested += (_, entry) => OutputOpenRequested?.Invoke(this, entry.ReportPath);
+        History.OpenManifestRequested += (_, entry) =>
+        {
+            if (entry.ManifestPath is not null && File.Exists(entry.ManifestPath))
+            {
+                OutputOpenRequested?.Invoke(this, entry.ManifestPath);
+            }
+        };
+        History.OpenFolderRequested += (_, _) => OutputOpenRequested?.Invoke(this, _appPaths.OutputsDirectory);
+
+        Palette.Opened += (_, _) =>
+        {
+            IsPaletteOpen = true;
+            RebuildPaletteCommands();
+        };
+        Palette.Closed += (_, _) =>
+        {
+            IsPaletteOpen = false;
+        };
+        Palette.QueryChanged += (_, _) =>
+        {
+            _paletteDebounceTimer?.Dispose();
+            _paletteDebounceTimer = new Timer(_ =>
+            {
+                _uiContext.Post(_ => UpdatePaletteResults(), null);
+            }, null, TimeSpan.FromMilliseconds(120), Timeout.InfiniteTimeSpan);
+        };
+        Palette.ExecuteRequested += (_, entry) =>
+        {
+            Palette.Close();
+            entry.Action?.Invoke();
+        };
+
+        PrefixPresets.StateChanged += OnPrefixPresetStateChanged;
+    }
+
+    private void OnNewPresetRequested(object? sender, PresetNameRequestEventArgs e)
+    {
+        var request = e;
+        PresetNameRequested?.Invoke(this, request);
+        if (!request.IsAccepted)
+        {
+            return;
+        }
+
+        var name = request.Name;
+        if (name is null)
+        {
+            return;
+        }
+
+        var validationError = ValidatePresetName(name, null);
+        if (validationError is not null)
+        {
+            StatusText = validationError;
+            return;
+        }
+
+        var now = DateTimeOffset.Now;
+        var preset = new Preset
+        {
+            Id = Guid.NewGuid(),
+            Name = name.Trim(),
+            CreatedAt = now,
+            UpdatedAt = now,
+            GlobalMode = _activePreset.GlobalMode,
+            ExtensionRules = [],
+            PathRules = [],
+            ScanOptions = new ScanOptions(),
+            ScanRootPath = Root.ScanRoot,
+            PrefixPresetId = PrefixPresets.SelectedId
+        };
+        _presetRepository.Save(preset);
+        LoadPresetList();
+        ActivatePreset(_presetRepository.Get(preset.Id) ?? preset);
+        RefreshRulePresentation();
+        UpdatePlan();
+        StatusText = $"Preset created: {preset.Name}";
+    }
+
+    private void OnSavePresetAsRequested(object? sender, PresetNameRequestEventArgs e)
+    {
+        PresetNameRequested?.Invoke(this, e);
+        if (!e.IsAccepted || e.Name is null)
+        {
+            return;
+        }
+
+        var name = e.Name;
+        var validationError = ValidatePresetName(name, null);
+        if (validationError is not null)
+        {
+            StatusText = validationError;
+            return;
+        }
+
+        var now = DateTimeOffset.Now;
+        var preset = CreateCurrentPreset(Guid.NewGuid(), name.Trim(), now, now);
+        _presetRepository.Save(preset);
+        LoadPresetList();
+        ActivatePreset(_presetRepository.Get(preset.Id) ?? preset);
+        StatusText = $"Preset saved as: {preset.Name}";
+    }
+
+    private void OnRenamePresetRequested(object? sender, PresetNameRequestEventArgs e)
+    {
+        PresetNameRequested?.Invoke(this, e);
+        if (!e.IsAccepted || e.Name is null)
+        {
+            return;
+        }
+
+        var name = e.Name;
+        var validationError = ValidatePresetName(name, _activePreset.Id);
+        if (validationError is not null)
+        {
+            StatusText = validationError;
+            return;
+        }
+
+        _activePreset.Name = name.Trim();
+        SaveCurrentPreset();
+    }
+
+    private void OnDeletePresetRequested(object? sender, UnsavedChangesRequestEventArgs e)
+    {
+        DeletePresetRequested?.Invoke(this, e);
+        if (e.Decision != UnsavedChangesDecision.Discard)
+        {
+            return;
+        }
+
+        if (_presetRepository.Delete(_activePreset.Id))
+        {
+            LoadPresetList();
+            ActivatePreset(GetDefaultPreset());
+            RefreshRulePresentation();
+            UpdatePlan();
+            StatusText = "Preset deleted.";
+        }
+    }
+
+    private void OnFormatsPropertyChange(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName is nameof(FormatsViewModel.SearchText))
+        {
+            _formatSearchDebounceTimer?.Dispose();
+            _formatSearchDebounceTimer = new Timer(_ =>
+            {
+                _uiContext.Post(_ => RebuildFormatsDisplay(), null);
+            }, null, TimeSpan.FromMilliseconds(250), Timeout.InfiniteTimeSpan);
+        }
+        else if (e.PropertyName is nameof(FormatsViewModel.SortKey) or nameof(FormatsViewModel.FilterKey))
+        {
+            RebuildFormatsDisplay();
+        }
+        else if (e.PropertyName == nameof(FormatsViewModel.IncludeAllExtensions))
+        {
+            if (_suppressFilterChanges || _activePreset is null)
+            {
+                return;
+            }
+
+            _activePreset.ScanOptions.IncludeAllExtensions = Formats.IncludeAllExtensions;
+            UpdateDirtyState();
+            UpdatePresetsCard();
+            UpdatePlan();
+            ApplyTreeFilter();
+        }
+    }
+
+    private void OnFiltersPropertyChange(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName is
+            nameof(FiltersViewModel.IncludeHidden) or
+            nameof(FiltersViewModel.IncludeSystem) or
+            nameof(FiltersViewModel.FollowReparsePoints) or
+            nameof(FiltersViewModel.BinaryFileMode) or
+            nameof(FiltersViewModel.RedactRootPath) or
+            nameof(FiltersViewModel.IncludeFileMetadataBlocks) or
+            nameof(FiltersViewModel.InventoryRefreshMinutes) or
+            nameof(FiltersViewModel.MaxFileSizeKiB))
+        {
+            if (_suppressFilterChanges)
+            {
+                return;
+            }
+
+            _filterDebounceTimer?.Dispose();
+            _filterDebounceTimer = new Timer(_ =>
+            {
+                _uiContext.Post(_ => ApplyFilterChanges(), null);
+            }, null, TimeSpan.FromMilliseconds(e.PropertyName == nameof(FiltersViewModel.MaxFileSizeKiB) ? 350 : 60), Timeout.InfiniteTimeSpan);
+        }
+    }
+
+    private void OnTreePropertyChange(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName is nameof(TreeViewModel.SearchText))
+        {
+            _searchDebounceTimer?.Dispose();
+            _searchDebounceTimer = new Timer(_ =>
+            {
+                _uiContext.Post(_ => ApplyTreeFilter(), null);
+            }, null, TimeSpan.FromMilliseconds(250), Timeout.InfiniteTimeSpan);
+        }
+        else if (e.PropertyName is
+            nameof(TreeViewModel.ShowFiles) or
+            nameof(TreeViewModel.ShowFolders) or
+            nameof(TreeViewModel.ShowLocalRulesOnly) or
+            nameof(TreeViewModel.ShowExcludedOnly) or
+            nameof(TreeViewModel.ShowLargeOnly) or
+            nameof(TreeViewModel.ShowBinaryOnly) or
+            nameof(TreeViewModel.ShowNoExtensionOnly))
+        {
+            ApplyTreeFilter();
+        }
+        else if (e.PropertyName == nameof(TreeViewModel.SelectedNode))
+        {
+            var node = Tree.SelectedNode;
+            Inspector.SelectedNode = node;
+            if (node is not null && !node.IsPlaceholder)
+            {
+                Inspector.ActiveTab = InspectorTab.Details;
+                Inspector.UpdateDetails();
+                Inspector.SetRuleSteps(BuildRuleSteps(node));
+                StatusText = node.ToolTipText;
+            }
+        }
+        else if (e.PropertyName == nameof(TreeViewModel.ActiveSection))
+        {
+            if (Tree.ActiveSection != TreeSection.Explorer)
+            {
+                _lastNonExplorerSection = Tree.ActiveSection;
+            }
+
+            if (Tree.ActiveSection == TreeSection.History)
+            {
+                RefreshHistory();
+            }
+        }
+    }
+
+    private void OnPrefixPresetStateChanged(object? sender, EventArgs e)
+    {
+        UpdatePreview();
+        if (!_suppressPrefixPresetState && _activePreset is not null)
+        {
+            UpdateDirtyState();
+        }
+    }
+
+    // ===== Preset logic =====
+
+    private void LoadPresetList()
+    {
+        Presets.PresetItems.Clear();
+        foreach (var preset in _presetRepository.GetAll())
+        {
+            Presets.PresetItems.Add(new PresetListItem(preset.Id, preset.Name, preset.Id == PresetDefaults.DefaultPresetId));
+        }
+    }
+
+    private Preset GetDefaultPreset()
+    {
+        return _presetRepository.Get(PresetDefaults.DefaultPresetId)
+            ?? throw new InvalidOperationException("The default preset could not be loaded.");
+    }
+
+    private string? ValidatePresetName(string name, Guid? currentId)
+    {
+        return PresetNameValidator.Validate(name, Presets.PresetItems, currentId);
     }
 
     private void TrySwitchPreset(Guid id)
     {
-        if (IsPresetDirty)
+        if (Presets.IsDirty)
         {
-            var request = new UnsavedChangesRequestEventArgs(ActivePresetName);
+            var request = new UnsavedChangesRequestEventArgs(Presets.ActivePresetName);
             UnsavedChangesRequested?.Invoke(this, request);
             if (request.Decision == UnsavedChangesDecision.Save && !SaveCurrentPreset())
             {
@@ -726,10 +1053,11 @@ public sealed partial class MainWindowViewModel : ObservableObject
         ActivatePreset(preset);
         var presetRoot = !string.IsNullOrWhiteSpace(preset.ScanRootPath) && Directory.Exists(preset.ScanRootPath)
             ? preset.ScanRootPath
-            : ScanRoot;
+            : Root.ScanRoot;
         SetRoot(presetRoot);
         ResetPresetDirtyState();
         RefreshRulePresentation();
+        UpdatePlan();
         StatusText = $"Preset selected: {preset.Name}";
     }
 
@@ -743,7 +1071,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
             LoadPresetList();
             ActivatePreset(_presetRepository.Get(preset.Id) ?? preset);
             _suppressPresetSelection = false;
-            OnPropertyChanged(nameof(SelectedPresetId));
+            Presets.SelectedPresetId = preset.Id;
             StatusText = $"Preset saved: {preset.Name}";
             return true;
         }
@@ -773,71 +1101,37 @@ public sealed partial class MainWindowViewModel : ObservableObject
         _suppressPrefixPresetState = false;
         LoadFilterSettings();
         _savedPresetState = CreatePresetState();
-        ActivePresetName = preset.Name;
-        IsDefaultPreset = preset.Id == PresetDefaults.DefaultPresetId;
-        IsPresetDirty = false;
-        var wasSuppressingPresetSelection = _suppressPresetSelection;
+        Presets.ActivePresetName = preset.Name;
+        Presets.IsDefaultPreset = preset.Id == PresetDefaults.DefaultPresetId;
+        Presets.IsDirty = false;
         _suppressPresetSelection = true;
-        SelectedPresetId = preset.Id;
-        OnPropertyChanged(nameof(SelectedPresetId));
-        _suppressPresetSelection = wasSuppressingPresetSelection;
-        OnPropertyChanged(nameof(RuleCount));
-        ResetLocalRuleCommand.NotifyCanExecuteChanged();
-        _appSessionStore.SetLastPresetId(preset.Id);
-    }
-
-    private void OnPrefixPresetStateChanged(object? sender, EventArgs e)
-    {
-        UpdatePreview();
-        if (!_suppressPrefixPresetState && _activePreset is not null)
-        {
-            UpdateDirtyState();
-        }
-    }
-
-    private void LoadPresetList()
-    {
-        PresetItems.Clear();
-        foreach (var preset in _presetRepository.GetAll())
-        {
-            PresetItems.Add(new PresetListItem(preset.Id, preset.Name, preset.Id == PresetDefaults.DefaultPresetId));
-        }
-    }
-
-    private Preset GetDefaultPreset()
-    {
-        return _presetRepository.Get(PresetDefaults.DefaultPresetId)
-            ?? throw new InvalidOperationException("The default preset could not be loaded.");
-    }
-
-    private string? RequestPresetName(string title, string prompt, string initialName)
-    {
-        var request = new PresetNameRequestEventArgs(title, prompt, initialName);
-        PresetNameRequested?.Invoke(this, request);
-        return request.IsAccepted ? request.Name : null;
-    }
-
-    private string? ValidatePresetName(string name, Guid? currentId)
-    {
-        return PresetNameValidator.Validate(name, PresetItems, currentId);
-    }
-
-    private void RestorePresetSelection()
-    {
-        _suppressPresetSelection = true;
-        SelectedPresetId = _activePreset.Id;
+        Presets.SelectedPresetId = preset.Id;
         _suppressPresetSelection = false;
+        UpdatePresetsCard();
     }
 
     private void UpdateDirtyState()
     {
-        IsPresetDirty = !ArePresetStatesEqual(CreatePresetState(), _savedPresetState);
+        Presets.IsDirty = !ArePresetStatesEqual(CreatePresetState(), _savedPresetState);
     }
 
     private void ResetPresetDirtyState()
     {
         _savedPresetState = CreatePresetState();
-        IsPresetDirty = false;
+        Presets.IsDirty = false;
+    }
+
+    private void UpdatePresetsCard()
+    {
+        Presets.RefreshCard(
+            _ruleSet.Rules.Count,
+            _activePreset.ExtensionRules.Count,
+            Filters.IncludePatterns.Count + Filters.ExcludePatterns.Count,
+            SizeFormatter.Format(_activePreset.ScanOptions.MaxFileSizeBytes),
+            _activePreset.ScanOptions.BinaryFileMode.ToString(),
+            string.IsNullOrEmpty(Root.ScanRoot) ? "—" : Root.ScanRoot,
+            PrefixPresets.SelectedName,
+            _activePreset.UpdatedAt.ToString("yyyy-MM-dd HH:mm"));
     }
 
     private static bool ArePresetStatesEqual(PresetState left, PresetState right)
@@ -872,7 +1166,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
             ExtensionRules = _activePreset.ExtensionRules.ToList(),
             PathRules = _ruleSet.Rules.ToList(),
             ScanOptions = CloneScanOptions(_activePreset.ScanOptions),
-            ScanRootPath = ScanRoot,
+            ScanRootPath = Root.ScanRoot,
             PrefixPresetId = PrefixPresets.SelectedId
         };
     }
@@ -881,7 +1175,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
     {
         return new PresetState(
             _activePreset.GlobalMode,
-            ScanRoot,
+            Root.ScanRoot,
             PrefixPresets.SelectedId,
             _activePreset.ExtensionRules.ToArray(),
             _ruleSet.Rules.ToArray(),
@@ -894,194 +1188,24 @@ public sealed partial class MainWindowViewModel : ObservableObject
             _activePreset.ScanOptions.RedactRootPath,
             _activePreset.ScanOptions.IncludeFileMetadataBlocks,
             _activePreset.ScanOptions.InventoryRefreshMinutes,
-            _activePreset.ScanOptions.IncludePatterns.ToArray(),
-            _activePreset.ScanOptions.ExcludePatterns.ToArray());
+            Filters.GetIncludePatterns().ToArray(),
+            Filters.GetExcludePatterns().ToArray());
     }
 
     private void LoadFilterSettings()
     {
         _suppressFilterChanges = true;
-        IncludeAllExtensions = _activePreset.ScanOptions.IncludeAllExtensions;
-        IncludeHidden = _activePreset.ScanOptions.IncludeHidden;
-        IncludeSystem = _activePreset.ScanOptions.IncludeSystem;
-        FollowReparsePoints = _activePreset.ScanOptions.FollowReparsePoints;
-        MaxFileSizeKiB = Math.Max(1, (int)Math.Min(int.MaxValue, _activePreset.ScanOptions.MaxFileSizeBytes / 1024));
-        BinaryFileMode = _activePreset.ScanOptions.BinaryFileMode;
-        RedactRootPath = _activePreset.ScanOptions.RedactRootPath;
-        IncludeFileMetadataBlocks = _activePreset.ScanOptions.IncludeFileMetadataBlocks;
-        InventoryRefreshMinutes = _activePreset.ScanOptions.InventoryRefreshMinutes;
-        IncludePatternsText = string.Join(Environment.NewLine, _activePreset.ScanOptions.IncludePatterns);
-        ExcludePatternsText = string.Join(Environment.NewLine, _activePreset.ScanOptions.ExcludePatterns);
+        Formats.IncludeAllExtensions = _activePreset.ScanOptions.IncludeAllExtensions;
+        Filters.IncludeHidden = _activePreset.ScanOptions.IncludeHidden;
+        Filters.IncludeSystem = _activePreset.ScanOptions.IncludeSystem;
+        Filters.FollowReparsePoints = _activePreset.ScanOptions.FollowReparsePoints;
+        Filters.MaxFileSizeKiB = Math.Max(1, (int)Math.Min(int.MaxValue, _activePreset.ScanOptions.MaxFileSizeBytes / 1024));
+        Filters.BinaryFileMode = _activePreset.ScanOptions.BinaryFileMode;
+        Filters.RedactRootPath = _activePreset.ScanOptions.RedactRootPath;
+        Filters.IncludeFileMetadataBlocks = _activePreset.ScanOptions.IncludeFileMetadataBlocks;
+        Filters.InventoryRefreshMinutes = _activePreset.ScanOptions.InventoryRefreshMinutes;
+        Filters.LoadPatterns(_activePreset.ScanOptions.IncludePatterns, _activePreset.ScanOptions.ExcludePatterns);
         _suppressFilterChanges = false;
-    }
-
-    private void UpdatePlan()
-    {
-        if (_inventorySnapshot is null)
-        {
-            PlanSummary = "Plan is unavailable until the inventory is loaded.";
-            return;
-        }
-
-        var plan = _collectionPlanner.CreatePlan(_inventorySnapshot, _ruleSet, _activePreset.ExtensionRules, _activePreset.ScanOptions);
-        _currentPlan = plan;
-        GenerateReportCommand.NotifyCanExecuteChanged();
-        LoadExtensionRuleItems(plan.ExtensionCounts);
-        var warning = plan.EstimatedBytes > 25L * 1024 * 1024 ? " · Large report warning" : string.Empty;
-        PlanSummary = $"Full: {plan.FullCount} · Signatures: {plan.SignaturesCount} · Listed: {plan.ListedCount} · Excluded: {plan.ExcludedCount} · Estimated: {FormatSize(plan.EstimatedBytes)}{warning}";
-        UpdatePreview();
-    }
-
-    [RelayCommand]
-    private void RefreshPreview()
-    {
-        UpdatePreview();
-    }
-
-    private void UpdatePreview()
-    {
-        var lines = new List<string>
-        {
-            "<!-- files-collector-report-preview: 1 -->",
-            "# Files Collector report preview",
-            string.Empty
-        };
-        if (!string.IsNullOrWhiteSpace(PrefixPresets.Content))
-        {
-            lines.Add(PrefixPresets.Content.TrimEnd());
-            lines.Add(string.Empty);
-        }
-
-        lines.Add("## Report metadata");
-        lines.Add($"preset: {ActivePresetName}");
-        lines.Add($"prefix_preset: {PrefixPresets.SelectedName}");
-        lines.Add($"root: {ScanRoot}");
-        lines.Add(string.Empty);
-        lines.Add("## File index");
-        if (_currentPlan is null)
-        {
-            lines.Add("Plan is not available.");
-        }
-        else
-        {
-            foreach (var item in _currentPlan.Items.Take(50))
-            {
-                lines.Add($"- [{item.Mode}] {item.RelativePath}{(item.Reason is null ? string.Empty : $" ({item.Reason})")}");
-            }
-
-            if (_currentPlan.Items.Count > 50)
-            {
-                lines.Add($"- ... {_currentPlan.Items.Count - 50} more item(s)");
-            }
-        }
-
-        PreviewText = string.Join(Environment.NewLine, lines);
-    }
-
-    private void LoadExtensionRuleItems(IReadOnlyDictionary<string, int> extensionCounts)
-    {
-        _suppressFilterChanges = true;
-        foreach (var item in ExtensionRuleItems)
-        {
-            item.Changed -= OnExtensionRuleChanged;
-        }
-
-        ExtensionRuleItems.Clear();
-        var extensions = extensionCounts.Keys
-            .Concat(_activePreset.ExtensionRules.Select(rule => rule.Extension))
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .OrderBy(extension => extension, StringComparer.OrdinalIgnoreCase);
-        foreach (var extension in extensions)
-        {
-            var rule = _activePreset.ExtensionRules.LastOrDefault(item => string.Equals(item.Extension, extension, StringComparison.OrdinalIgnoreCase));
-            var item = new ExtensionRuleItem(extension, extensionCounts.GetValueOrDefault(extension), rule?.Enabled ?? IncludeAllExtensions, rule?.Mode ?? CollectionMode.Full);
-            item.Changed += OnExtensionRuleChanged;
-            ExtensionRuleItems.Add(item);
-        }
-
-        _suppressFilterChanges = false;
-    }
-
-    private void OnExtensionRuleChanged(object? sender, EventArgs e)
-    {
-        if (_suppressFilterChanges || sender is not ExtensionRuleItem item)
-        {
-            return;
-        }
-
-        _activePreset.ExtensionRules.RemoveAll(rule => string.Equals(rule.Extension, item.Extension, StringComparison.OrdinalIgnoreCase));
-        if (item.Enabled != IncludeAllExtensions || item.Mode != CollectionMode.Full)
-        {
-            _activePreset.ExtensionRules.Add(new ExtensionRule(item.Extension, item.Enabled, item.Mode));
-        }
-
-        UpdateDirtyState();
-        UpdatePlan();
-    }
-
-    partial void OnIncludeAllExtensionsChanged(bool value)
-    {
-        ApplyFilterChanges();
-    }
-
-    partial void OnIncludeHiddenChanged(bool value)
-    {
-        ApplyFilterChanges();
-    }
-
-    partial void OnIncludeSystemChanged(bool value)
-    {
-        ApplyFilterChanges();
-    }
-
-    partial void OnFollowReparsePointsChanged(bool value)
-    {
-        ApplyFilterChanges();
-    }
-
-    partial void OnIncludePatternsTextChanged(string value)
-    {
-        ScheduleFilterChanges();
-    }
-
-    partial void OnExcludePatternsTextChanged(string value)
-    {
-        ScheduleFilterChanges();
-    }
-
-    partial void OnMaxFileSizeKiBChanged(int value)
-    {
-        ApplyFilterChanges();
-    }
-
-    partial void OnBinaryFileModeChanged(CollectionMode value)
-    {
-        ApplyFilterChanges();
-    }
-
-    partial void OnRedactRootPathChanged(bool value)
-    {
-        ApplyFilterChanges();
-    }
-
-    partial void OnIncludeFileMetadataBlocksChanged(bool value)
-    {
-        ApplyFilterChanges();
-    }
-
-    partial void OnInventoryRefreshMinutesChanged(int value)
-    {
-        ApplyFilterChanges();
-        ConfigureInventoryRefreshTimer();
-    }
-
-    private void ScheduleFilterChanges()
-    {
-        _filterDebounceTimer?.Dispose();
-        _filterDebounceTimer = new Timer(_ =>
-        {
-            _uiContext.Post(_ => ApplyFilterChanges(), null);
-        }, null, TimeSpan.FromMilliseconds(600), Timeout.InfiniteTimeSpan);
     }
 
     private void ApplyFilterChanges()
@@ -1091,43 +1215,119 @@ public sealed partial class MainWindowViewModel : ObservableObject
             return;
         }
 
-        _activePreset.ScanOptions.IncludeAllExtensions = IncludeAllExtensions;
-        _activePreset.ScanOptions.IncludeHidden = IncludeHidden;
-        _activePreset.ScanOptions.IncludeSystem = IncludeSystem;
-        _activePreset.ScanOptions.FollowReparsePoints = FollowReparsePoints;
-        _activePreset.ScanOptions.MaxFileSizeBytes = Math.Max(1, MaxFileSizeKiB) * 1024L;
-        _activePreset.ScanOptions.BinaryFileMode = BinaryFileMode;
-        _activePreset.ScanOptions.RedactRootPath = RedactRootPath;
-        _activePreset.ScanOptions.IncludeFileMetadataBlocks = IncludeFileMetadataBlocks;
-        _activePreset.ScanOptions.InventoryRefreshMinutes = Math.Max(0, InventoryRefreshMinutes);
-        _activePreset.ScanOptions.IncludePatterns = ParsePatterns(IncludePatternsText);
-        _activePreset.ScanOptions.ExcludePatterns = ParsePatterns(ExcludePatternsText);
+        _activePreset.ScanOptions.IncludeAllExtensions = Formats.IncludeAllExtensions;
+        _activePreset.ScanOptions.IncludeHidden = Filters.IncludeHidden;
+        _activePreset.ScanOptions.IncludeSystem = Filters.IncludeSystem;
+        _activePreset.ScanOptions.FollowReparsePoints = Filters.FollowReparsePoints;
+        _activePreset.ScanOptions.MaxFileSizeBytes = Math.Max(1, Filters.MaxFileSizeKiB) * 1024L;
+        _activePreset.ScanOptions.BinaryFileMode = Filters.BinaryFileMode;
+        _activePreset.ScanOptions.RedactRootPath = Filters.RedactRootPath;
+        _activePreset.ScanOptions.IncludeFileMetadataBlocks = Filters.IncludeFileMetadataBlocks;
+        _activePreset.ScanOptions.InventoryRefreshMinutes = Math.Max(0, Filters.InventoryRefreshMinutes);
+        _activePreset.ScanOptions.IncludePatterns = Filters.GetIncludePatterns().ToList();
+        _activePreset.ScanOptions.ExcludePatterns = Filters.GetExcludePatterns().ToList();
         UpdateDirtyState();
+        UpdatePresetsCard();
+        ConfigureInventoryRefreshTimer();
         UpdatePlan();
+        ApplyTreeFilter();
+        RebuildHistogram();
     }
 
-    private static List<string> ParsePatterns(string value)
+    private void ApplyExtensionChanges()
     {
-        return value
-            .Split(['\r', '\n', ';'], StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToList();
-    }
-
-    private static string FormatSize(long sizeBytes)
-    {
-        return sizeBytes switch
+        if (_suppressFilterChanges || _activePreset is null)
         {
-            < 1024 => $"{sizeBytes} B",
-            < 1024 * 1024 => $"{sizeBytes / 1024d:F1} KiB",
-            _ => $"{sizeBytes / 1024d / 1024d:F1} MiB"
-        };
+            return;
+        }
+
+        _activePreset.ExtensionRules = _extensionRows
+            .Where(row => row.Enabled != _activePreset.ScanOptions.IncludeAllExtensions || row.Mode != CollectionMode.Full)
+            .Select(row => new ExtensionRule(row.Extension, row.Enabled, row.Mode))
+            .ToList();
+        UpdateDirtyState();
+        UpdatePresetsCard();
+        UpdatePlan();
+        ApplyTreeFilter();
+    }
+
+    private void OnExtensionRowChanged(object? sender, EventArgs e)
+    {
+        if (_suppressFilterChanges || sender is not ExtensionRow item)
+        {
+            return;
+        }
+
+        ApplyExtensionChanges();
+    }
+
+    private void SetAllExtensionsEnabled(bool enable)
+    {
+        foreach (var row in _extensionRows)
+        {
+            row.Enabled = enable;
+        }
+    }
+
+    // ===== Inventory =====
+
+    [RelayCommand]
+    private async Task RefreshInventory(CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(Root.ScanRoot) || !Directory.Exists(Root.ScanRoot))
+        {
+            Root.InventoryStatus = "Inventory cannot be refreshed because the scan root is unavailable.";
+            return;
+        }
+
+        _inventoryRefreshCancellation?.Cancel();
+        _inventoryRefreshCancellation?.Dispose();
+        _inventoryRefreshCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        Root.IsRefreshingInventory = true;
+        Root.InventoryStatus = "Refreshing inventory...";
+        var rootPath = Root.ScanRoot;
+        var excludedDirectoryPath = _excludedDirectoryPath;
+        var progress = new Progress<InventoryRefreshProgress>(value =>
+        {
+            Root.InventoryStatus = $"Scanning… {value.DiscoveredFiles:N0} files, {value.DiscoveredDirectories:N0} folders";
+        });
+
+        try
+        {
+            var snapshot = await Task.Run(
+                () => _inventoryStore.Refresh(rootPath, excludedDirectoryPath, progress, _inventoryRefreshCancellation.Token),
+                _inventoryRefreshCancellation.Token);
+            if (string.Equals(Root.ScanRoot, rootPath, StringComparison.OrdinalIgnoreCase))
+            {
+                _inventorySnapshot = snapshot;
+                _firstInventoryLoaded = true;
+                Root.InventoryStatus = $"Inventory updated: {snapshot.Files.Count:N0} files";
+                UpdatePlan();
+                UpdateOnboarding();
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            Root.InventoryStatus = "Inventory refresh canceled.";
+        }
+        catch (IOException exception)
+        {
+            Root.InventoryStatus = $"Inventory refresh failed: {exception.Message}";
+        }
+        catch (UnauthorizedAccessException exception)
+        {
+            Root.InventoryStatus = $"Inventory refresh failed: {exception.Message}";
+        }
+        finally
+        {
+            Root.IsRefreshingInventory = false;
+        }
     }
 
     private void ConfigureInventoryRefreshTimer()
     {
         _inventoryRefreshTimer?.Dispose();
-        var intervalMinutes = Math.Max(0, InventoryRefreshMinutes);
+        var intervalMinutes = Math.Max(0, Filters.InventoryRefreshMinutes);
         if (intervalMinutes == 0)
         {
             _inventoryRefreshTimer = null;
@@ -1139,7 +1339,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
         {
             _uiContext.Post(_ =>
             {
-                if (!IsRefreshingInventory)
+                if (!Root.IsRefreshingInventory)
                 {
                     _ = RefreshInventory(CancellationToken.None);
                 }
@@ -1151,14 +1351,14 @@ public sealed partial class MainWindowViewModel : ObservableObject
     {
         _inventoryWatcher?.Dispose();
         _inventoryWatcher = null;
-        if (string.IsNullOrWhiteSpace(ScanRoot) || !Directory.Exists(ScanRoot))
+        if (string.IsNullOrWhiteSpace(Root.ScanRoot) || !Directory.Exists(Root.ScanRoot))
         {
             return;
         }
 
         try
         {
-            var watcher = new FileSystemWatcher(ScanRoot)
+            var watcher = new FileSystemWatcher(Root.ScanRoot)
             {
                 IncludeSubdirectories = true,
                 NotifyFilter = NotifyFilters.FileName | NotifyFilters.DirectoryName | NotifyFilters.Size | NotifyFilters.LastWrite,
@@ -1173,11 +1373,11 @@ public sealed partial class MainWindowViewModel : ObservableObject
         }
         catch (IOException)
         {
-            InventoryStatus = "Inventory watcher is unavailable. Periodic refresh remains active.";
+            Root.InventoryStatus = "Inventory watcher is unavailable. Periodic refresh remains active.";
         }
         catch (ArgumentException)
         {
-            InventoryStatus = "Inventory watcher is unavailable. Periodic refresh remains active.";
+            Root.InventoryStatus = "Inventory watcher is unavailable. Periodic refresh remains active.";
         }
     }
 
@@ -1204,7 +1404,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
         {
             _uiContext.Post(_ =>
             {
-                if (!IsRefreshingInventory)
+                if (!Root.IsRefreshingInventory)
                 {
                     _ = RefreshInventory(CancellationToken.None);
                 }
@@ -1212,45 +1412,244 @@ public sealed partial class MainWindowViewModel : ObservableObject
         }, null, TimeSpan.FromSeconds(2), Timeout.InfiniteTimeSpan);
     }
 
-    private void ApplyTreeFilter()
+    // ===== Plan =====
+
+    private void UpdatePlan()
     {
-        foreach (var rootNode in RootNodes)
+        if (_inventorySnapshot is null)
         {
-            ApplyTreeFilter(rootNode);
+            Inspector.Plan.MarkUnavailable();
+            RebuildFormatsDisplay();
+            UpdatePreview();
+            return;
+        }
+
+        var snapshot = _inventorySnapshot;
+        var plan = _collectionPlanner.CreatePlan(snapshot, _ruleSet, _activePreset.ExtensionRules, _activePreset.ScanOptions);
+        _currentPlan = plan;
+        _planItemsByPath = plan.Items.ToDictionary(item => item.RelativePath, StringComparer.OrdinalIgnoreCase);
+
+        var extensionSizes = new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase);
+        var totalSize = 0L;
+        foreach (var file in snapshot.Files)
+        {
+            var size = file.SizeBytes ?? 0;
+            totalSize += size;
+            extensionSizes[file.Extension] = extensionSizes.GetValueOrDefault(file.Extension, 0) + size;
+        }
+
+        Inspector.Plan.Refresh(plan, extensionSizes, totalSize);
+
+        BuildFolderAggregates();
+        RebuildExtensionRows(snapshot, extensionSizes);
+        Formats.EffectSummary = $"In report: {plan.FullCount + plan.SignaturesCount:N0} files · {SizeFormatter.Format(plan.EstimatedBytes)}";
+        RebuildFormatsDisplay();
+        UpdatePatternMatchCounts(snapshot);
+        RebuildHistogram();
+
+        foreach (var rootNode in GetRootNodes())
+        {
+            ApplyPlanDataToSubtree(rootNode);
+        }
+
+        UpdatePreview();
+        GenerateReportCommand.NotifyCanExecuteChanged();
+    }
+
+    private void RebuildExtensionRows(FileInventorySnapshot snapshot, IReadOnlyDictionary<string, long> extensionSizes)
+    {
+        foreach (var row in _extensionRows)
+        {
+            row.Changed -= OnExtensionRowChanged;
+        }
+
+        _extensionRows = [];
+        var allExtensions = snapshot.ExtensionCounts.Keys
+            .Concat(_activePreset.ExtensionRules.Select(rule => rule.Extension))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        var totalSize = Math.Max(1L, snapshot.Files.Sum(file => file.SizeBytes ?? 0));
+        foreach (var extension in allExtensions)
+        {
+            var rule = _activePreset.ExtensionRules.LastOrDefault(item => string.Equals(item.Extension, extension, StringComparison.OrdinalIgnoreCase));
+            var row = new ExtensionRow(
+                extension,
+                snapshot.ExtensionCounts.GetValueOrDefault(extension),
+                extensionSizes.GetValueOrDefault(extension),
+                rule?.Enabled ?? _activePreset.ScanOptions.IncludeAllExtensions,
+                rule?.Mode ?? CollectionMode.Full);
+            row.SizeShare = extensionSizes.GetValueOrDefault(extension) * 1.0 / totalSize;
+            row.Changed += OnExtensionRowChanged;
+            _extensionRows.Add(row);
+        }
+
+        Formats.DisabledCount = _extensionRows.Count(row => !row.Enabled);
+        Formats.EffectSummary = string.Empty;
+    }
+
+    private void RebuildFormatsDisplay()
+    {
+        var rows = _extensionRows.ToList();
+
+        // Apply the quick filter.
+        switch (Formats.FilterKey)
+        {
+            case ExtensionFilter.Enabled:
+                rows = rows.Where(row => row.Enabled).ToList();
+                break;
+            case ExtensionFilter.Disabled:
+                rows = rows.Where(row => !row.Enabled).ToList();
+                break;
+            case ExtensionFilter.Binary:
+                rows = rows.Where(row => row.IsBinary).ToList();
+                break;
+            case ExtensionFilter.NoExtension:
+                rows = rows.Where(row => !row.HasExtension).ToList();
+                break;
+        }
+
+        var search = Formats.SearchText.Trim();
+        if (search.Length > 0)
+        {
+            rows = rows.Where(row => row.Extension.Contains(search, StringComparison.OrdinalIgnoreCase)).ToList();
+        }
+
+        rows = Formats.SortKey switch
+        {
+            ExtensionSort.Files => rows.OrderByDescending(row => row.Count).ThenBy(row => row.Extension, StringComparer.OrdinalIgnoreCase).ToList(),
+            ExtensionSort.Size => rows.OrderByDescending(row => row.SizeBytes).ThenBy(row => row.Extension, StringComparer.OrdinalIgnoreCase).ToList(),
+            _ => rows.OrderBy(row => row.Extension, StringComparer.OrdinalIgnoreCase).ToList()
+        };
+
+        Formats.Rows.Clear();
+        foreach (var row in rows)
+        {
+            Formats.Rows.Add(row);
         }
     }
 
-    private bool ApplyTreeFilter(FileTreeNode node)
+    private void UpdatePatternMatchCounts(FileInventorySnapshot snapshot)
     {
-        if (node.IsPlaceholder)
+        var includeCounts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        foreach (var item in Filters.IncludePatterns)
         {
-            node.IsVisible = false;
-            return false;
+            includeCounts[item.Text] = GlobStats.CountMatches(snapshot, item.Text);
         }
 
-        var childMatches = false;
-        foreach (var child in node.Children)
+        var excludeCounts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        foreach (var item in Filters.ExcludePatterns)
         {
-            childMatches |= ApplyTreeFilter(child);
+            excludeCounts[item.Text] = GlobStats.CountMatches(snapshot, item.Text);
         }
 
-        var matchesText = string.IsNullOrWhiteSpace(SearchText) ||
-            node.DisplayName.Contains(SearchText, StringComparison.OrdinalIgnoreCase) ||
-            node.RelativePath.Contains(SearchText, StringComparison.OrdinalIgnoreCase);
-        var matchesKind = node.IsDirectory ? ShowFolders : ShowFiles;
-        var matchesRule = !ShowLocalRulesOnly || node.HasLocalRule;
-        var matchesMode = !ShowExcludedOnly || node.EffectiveMode == CollectionMode.Excluded;
-        node.IsVisible = (matchesText && matchesKind && matchesRule && matchesMode) || childMatches;
-        return node.IsVisible;
+        Filters.SetPatternMatchCounts(includeCounts, excludeCounts);
+    }
+
+    private void RebuildHistogram()
+    {
+        if (_inventorySnapshot is null)
+        {
+            Filters.HistogramBuckets = [];
+            Filters.HistogramMaxKiB = 10240;
+            return;
+        }
+
+        var maxFileKiB = 0.0;
+        foreach (var file in _inventorySnapshot.Files)
+        {
+            if (file.SizeBytes is { } size)
+            {
+                maxFileKiB = Math.Max(maxFileKiB, size / 1024d);
+            }
+        }
+
+        var target = Math.Max(10240.0, maxFileKiB);
+        var power = 1024.0;
+        while (power * 2 < target && power < 1048576.0)
+        {
+            power *= 2;
+        }
+
+        var maxKiB = Math.Min(1048576.0, Math.Max(target, power));
+
+        const int bucketCount = 48;
+        var counts = new long[bucketCount];
+        foreach (var file in _inventorySnapshot.Files)
+        {
+            if (file.SizeBytes is not { } size)
+            {
+                continue;
+            }
+
+            var kiB = size / 1024d;
+            if (kiB >= maxKiB)
+            {
+                continue;
+            }
+
+            var index = (int)(kiB / maxKiB * bucketCount);
+            if (index >= 0 && index < bucketCount)
+            {
+                counts[index]++;
+            }
+        }
+
+        var maxCount = counts.Max();
+        var thresholdKiB = (double)Filters.MaxFileSizeKiB;
+        Filters.HistogramBuckets = counts
+            .Select((count, index) =>
+            {
+                var bucketStart = index / (double)bucketCount * maxKiB;
+                return new Controls.SizeBucket(index, count, maxCount > 0 ? (double)count / maxCount : 0, bucketStart > thresholdKiB);
+            })
+            .ToList();
+        Filters.HistogramMaxKiB = maxKiB;
+    }
+
+    private void UpdatePreview()
+    {
+        Inspector.RefreshPreview(
+            PrefixPresets.Content,
+            _currentPlan,
+            Presets.ActivePresetName,
+            PrefixPresets.SelectedName,
+            Root.ScanRoot,
+            _activePreset.ScanOptions.RedactRootPath,
+            _activePreset.ScanOptions.IncludeFileMetadataBlocks);
+    }
+
+    // ===== Tree presentation =====
+
+    private IEnumerable<FileTreeNode> GetRootNodes()
+    {
+        // The tree root collection is owned by the view model through the window;
+        // we keep it accessible via a dedicated field populated in SetRoot.
+        return _rootNodes;
+    }
+
+    private readonly List<FileTreeNode> _rootNodes = [];
+
+    private void AddRootNode(FileTreeNode node)
+    {
+        _rootNodes.Clear();
+        _rootNodes.Add(node);
+        Tree.RootNodes.Add(node);
+    }
+
+    private void UnloadAllNodes()
+    {
+        _rootNodes.Clear();
+        Tree.RootNodes.Clear();
     }
 
     private void RefreshRulePresentation()
     {
-        foreach (var rootNode in RootNodes)
+        foreach (var rootNode in _rootNodes)
         {
             RefreshRulePresentation(rootNode);
         }
 
+        UpdatePlan();
         ApplyTreeFilter();
     }
 
@@ -1273,9 +1672,470 @@ public sealed partial class MainWindowViewModel : ObservableObject
         node.ApplyRuleResolution(_ruleSet.Resolve(node.RelativePath, GetRuleKind(node)));
     }
 
+    private void ApplyPlanDataToSubtree(FileTreeNode node)
+    {
+        if (!node.IsPlaceholder)
+        {
+            ApplyPlanData(node);
+        }
+
+        foreach (var child in node.Children)
+        {
+            ApplyPlanDataToSubtree(child);
+        }
+    }
+
+    private void ApplyPlanData(FileTreeNode node)
+    {
+        if (node.IsDirectory)
+        {
+            var key = node.RelativePath.Length == 0 ? string.Empty : RuleSet.NormalizeRelativePath(node.RelativePath);
+            if (_folderAggregates.TryGetValue(key, out var aggregate))
+            {
+                node.SizeDisplay = $"{aggregate.Count:N0} · {SizeFormatter.FormatCompact(aggregate.SizeBytes)}";
+            }
+            else if (_inventorySnapshot is not null)
+            {
+                node.SizeDisplay = string.Empty;
+            }
+
+            return;
+        }
+
+        if (!_planItemsByPath.TryGetValue(node.RelativePath, out var item))
+        {
+            node.SizeDisplay = string.Empty;
+            return;
+        }
+
+        node.PlanSizeBytes = item.SizeBytes;
+        node.PlanReason = item.Reason;
+        if (item.Mode != node.EffectiveMode)
+        {
+            node.EffectiveMode = item.Mode;
+            node.OnPropertyChanged(nameof(FileTreeNode.IsDimmed));
+        }
+
+        var extensionExtension = Path.GetExtension(node.DisplayName).ToLowerInvariant();
+        var isExtensionDriven = node.RuleSource == RuleSource.Global && item.Mode != _activePreset.GlobalMode;
+        node.SourceGlyph = node.RuleSource switch
+        {
+            RuleSource.Local => "L",
+            RuleSource.Inherited => "I",
+            RuleSource.System => "S",
+            _ => isExtensionDriven ? "E" : "·"
+        };
+        node.SourceDescription = node.RuleSource switch
+        {
+            RuleSource.Local => "A local rule is set on this item.",
+            RuleSource.Inherited => "Inherited from a folder rule.",
+            RuleSource.System => "System exclusion.",
+            _ => isExtensionDriven ? $"Extension rule for {extensionExtension}." : $"Global default mode ({_activePreset.GlobalMode})."
+        };
+
+        node.SizeDisplay = item.SizeBytes is { } size ? SizeFormatter.FormatCompact(size) : string.Empty;
+    }
+
+    private void BuildFolderAggregates()
+    {
+        var aggregates = new Dictionary<string, (int Count, long SizeBytes)>(StringComparer.OrdinalIgnoreCase);
+        if (_inventorySnapshot is null)
+        {
+            _folderAggregates = aggregates;
+            return;
+        }
+
+        foreach (var file in _inventorySnapshot.Files)
+        {
+            var current = Path.GetDirectoryName(file.RelativePath.Replace('\\', '/')) ?? string.Empty;
+            while (true)
+            {
+                if (aggregates.TryGetValue(current, out var value))
+                {
+                    aggregates[current] = (value.Count + 1, value.SizeBytes + (file.SizeBytes ?? 0));
+                }
+                else
+                {
+                    aggregates[current] = (1, file.SizeBytes ?? 0);
+                }
+
+                var parent = Path.GetDirectoryName(current);
+                if (parent is null || parent.Length == 0)
+                {
+                    break;
+                }
+
+                current = parent;
+            }
+        }
+
+        _folderAggregates = aggregates;
+    }
+
+    private void ApplyTreeFilter()
+    {
+        foreach (var rootNode in _rootNodes)
+        {
+            ApplyTreeFilter(rootNode);
+        }
+    }
+
+    private bool ApplyTreeFilter(FileTreeNode node)
+    {
+        if (node.IsPlaceholder)
+        {
+            node.IsVisible = false;
+            return false;
+        }
+
+        var childMatches = false;
+        foreach (var child in node.Children)
+        {
+            childMatches |= ApplyTreeFilter(child);
+        }
+
+        var matchesText = string.IsNullOrWhiteSpace(Tree.SearchText) ||
+            node.DisplayName.Contains(Tree.SearchText, StringComparison.OrdinalIgnoreCase) ||
+            node.RelativePath.Contains(Tree.SearchText, StringComparison.OrdinalIgnoreCase);
+        var matchesKind = node.IsDirectory ? Tree.ShowFolders : Tree.ShowFiles;
+        var matchesRule = !Tree.ShowLocalRulesOnly || node.HasLocalRule;
+        var matchesMode = !Tree.ShowExcludedOnly || node.EffectiveMode == CollectionMode.Excluded;
+
+        var matchesFileSpecific = true;
+        if (Tree.ShowLargeOnly || Tree.ShowBinaryOnly || Tree.ShowNoExtensionOnly)
+        {
+            if (node.IsDirectory)
+            {
+                matchesFileSpecific = false;
+            }
+            else
+            {
+                if (Tree.ShowLargeOnly && !node.IsLargeFile)
+                {
+                    matchesFileSpecific = false;
+                }
+
+                if (Tree.ShowBinaryOnly && !node.IsBinaryFile)
+                {
+                    matchesFileSpecific = false;
+                }
+
+                if (Tree.ShowNoExtensionOnly && node.HasExtension)
+                {
+                    matchesFileSpecific = false;
+                }
+            }
+        }
+
+        node.IsVisible = (matchesText && matchesKind && matchesRule && matchesMode && matchesFileSpecific) || childMatches;
+        return node.IsVisible;
+    }
+
+    private FileTreeNode? FindNodeBySegments(FileTreeNode start, string[] segments, int index)
+    {
+        if (index == segments.Length)
+        {
+            return start;
+        }
+
+        if (start.IsDirectory && !start.AreChildrenLoaded && start.IsAccessible && !start.IsReparsePoint)
+        {
+            LoadChildren(start);
+        }
+
+        foreach (var child in start.Children)
+        {
+            if (child.IsPlaceholder)
+            {
+                continue;
+            }
+
+            if (string.Equals(child.DisplayName, segments[index], StringComparison.OrdinalIgnoreCase))
+            {
+                var found = FindNodeBySegments(child, segments, index + 1);
+                if (found is not null)
+                {
+                    return found;
+                }
+            }
+        }
+
+        return null;
+    }
+
     private string GetRelativePath(string fullPath)
     {
-        return RuleSet.NormalizeRelativePath(Path.GetRelativePath(ScanRoot, fullPath));
+        return RuleSet.NormalizeRelativePath(Path.GetRelativePath(Root.ScanRoot, fullPath));
+    }
+
+    // ===== Rule chain (inspector) =====
+
+    public IEnumerable<RuleStepInfo> BuildRuleSteps(FileTreeNode node)
+    {
+        var steps = new List<RuleStepInfo>();
+        var kind = GetRuleKind(node);
+        var relativePath = RuleSet.NormalizeRelativePath(node.RelativePath);
+
+        steps.Add(new RuleStepInfo("System exclusion", "The application folder is never collected.", CollectionMode.Excluded, false));
+
+        var localRule = _ruleSet.Rules.LastOrDefault(rule => rule.Kind == kind && string.Equals(rule.RelativePath, relativePath, StringComparison.OrdinalIgnoreCase));
+        steps.Add(new RuleStepInfo("Local rule", localRule is null ? null : "Set on this item", localRule?.Mode, false));
+
+        var inheritedRule = _ruleSet.Rules
+            .Where(rule => rule.Kind == PathRuleKind.Directory && (string.IsNullOrEmpty(rule.RelativePath) || relativePath.StartsWith(rule.RelativePath + "/", StringComparison.OrdinalIgnoreCase) || string.Equals(relativePath, rule.RelativePath, StringComparison.OrdinalIgnoreCase)))
+            .OrderByDescending(rule => rule.RelativePath.Length)
+            .FirstOrDefault();
+        steps.Add(new RuleStepInfo("Folder rule (inherited)", inheritedRule is null ? null : inheritedRule.RelativePath.Length == 0 ? "(root folder)" : inheritedRule.RelativePath, inheritedRule?.Mode, false));
+
+        var extension = Path.GetExtension(node.DisplayName).ToLowerInvariant();
+        var normalizedExtension = extension.Length == 0 ? "[no extension]" : extension;
+        var extensionRule = _activePreset.ExtensionRules.LastOrDefault(rule => string.Equals(CheckExtension(rule.Extension), normalizedExtension, StringComparison.OrdinalIgnoreCase));
+        steps.Add(new RuleStepInfo(
+            "Extension rule",
+            extensionRule is null ? null : extensionRule.Enabled ? null : "disabled",
+            extensionRule is { Enabled: true } ? extensionRule.Mode : null,
+            false));
+
+        steps.Add(new RuleStepInfo("Global default", null, _activePreset.GlobalMode, false));
+
+        CollectionMode? finalMode = null;
+        string? finalDetail = null;
+        if (!node.IsDirectory && _planItemsByPath.TryGetValue(node.RelativePath, out var item))
+        {
+            finalMode = item.Mode;
+            finalDetail = string.IsNullOrEmpty(item.Reason) ? null : ReasonCatalog.Describe(item.Reason);
+        }
+        else
+        {
+            finalMode = node.EffectiveMode;
+        }
+
+        steps.Add(new RuleStepInfo("Final plan decision", finalDetail, finalMode, false));
+
+        // Mark the winner.
+        var winnerIndex = node.RuleSource switch
+        {
+            RuleSource.System => 0,
+            RuleSource.Local => 1,
+            RuleSource.Inherited => 2,
+            _ => -1
+        };
+
+        if (winnerIndex < 0)
+        {
+            var extensionApplied = extensionRule is { Enabled: true } &&
+                node.EffectiveMode == extensionRule.Mode &&
+                extensionRule.Mode != _activePreset.GlobalMode;
+            winnerIndex = extensionApplied ? 3 : 4;
+        }
+
+        // If the final plan decision overrides the rule winner (size limit, binary mode, patterns), the final step wins.
+        if (finalMode is { } final && final != steps[winnerIndex].Mode)
+        {
+            winnerIndex = steps.Count - 1;
+        }
+
+        steps[winnerIndex] = steps[winnerIndex] with { IsWinner = true };
+        return steps;
+    }
+
+    private static string CheckExtension(string extension)
+    {
+        if (string.Equals(extension, "[no extension]", StringComparison.OrdinalIgnoreCase))
+        {
+            return extension;
+        }
+
+        return extension.StartsWith('.') ? extension.ToLowerInvariant() : "." + extension.ToLowerInvariant();
+    }
+
+    // ===== Breadcrumbs, paths, onboarding =====
+
+    private static List<BreadcrumbSegment> BuildBreadcrumbSegments(string rootPath)
+    {
+        var segments = new List<BreadcrumbSegment>();
+        try
+        {
+            var directory = new DirectoryInfo(rootPath.TrimEnd(Path.DirectorySeparatorChar));
+            var labels = new List<string>();
+            var paths = new List<string>();
+            while (directory is not null)
+            {
+                labels.Add(directory.Name.Length == 0 ? directory.FullName : directory.Name);
+                paths.Add(directory.FullName);
+                directory = directory.Parent;
+            }
+
+            labels.Reverse();
+            paths.Reverse();
+            if (labels.Count > 5)
+            {
+                var visible = new List<(string Label, string Path)>
+                {
+                    (labels[0], paths[0]),
+                    ("…", paths[labels.Count - 3])
+                };
+                for (var i = labels.Count - 3; i < labels.Count; i++)
+                {
+                    visible.Add((labels[i], paths[i]));
+                }
+
+                return visible.Select(item => new BreadcrumbSegment(item.Label, item.Path)).ToList();
+            }
+
+            for (var i = 0; i < labels.Count; i++)
+            {
+                segments.Add(new BreadcrumbSegment(labels[i], paths[i]));
+            }
+        }
+        catch (IOException)
+        {
+            segments.Add(new BreadcrumbSegment(rootPath, rootPath));
+        }
+        catch (ArgumentException)
+        {
+            segments.Add(new BreadcrumbSegment(rootPath, rootPath));
+        }
+
+        return segments;
+    }
+
+    private void UpdateOnboarding()
+    {
+        var show = !Root.HasUsableRoot || (!_uiSettings.Settings.HasSeenOnboarding && !_firstInventoryLoaded);
+        Tree.IsOnboardingVisible = show;
+    }
+
+    private void PersistOnboardingSeen()
+    {
+        var settings = _uiSettings.Settings;
+        if (!settings.HasSeenOnboarding)
+        {
+            _uiSettings.Save(settings with { HasSeenOnboarding = true });
+        }
+    }
+
+    // ===== Undo =====
+
+    private void RegisterUndo(string label, Action undo)
+    {
+        _lastUndo = (label, undo);
+    }
+
+    private void RunUndo()
+    {
+        if (_lastUndo is { } entry)
+        {
+            _lastUndo = null;
+            entry.Undo();
+            StatusText = $"Undone: {entry.Label}";
+        }
+    }
+
+    // ===== Palette =====
+
+    private void RebuildPaletteCommands()
+    {
+        var commands = new List<PaletteEntry>
+        {
+            new("Change scan root…", "Pick a different folder to scan", null, PaletteEntryKind.Command, () => RootChangeRequested?.Invoke(this, EventArgs.Empty)),
+            new("Refresh tree", "Re-read the visible tree", "F5", PaletteEntryKind.Command, () => SetRoot(Root.ScanRoot)),
+            new("Refresh inventory", "Full background scan of the root", null, PaletteEntryKind.Command, () => _ = RefreshInventory(CancellationToken.None)),
+            new("Create report", "Generate the Markdown report and manifest", null, PaletteEntryKind.Command, () => { if (GenerateReportCommand.CanExecute(null)) { _ = GenerateReport(CancellationToken.None); } }),
+            new("Open last report", $"Last: {string.IsNullOrEmpty(LastReportName) ? "none" : LastReportName}", "Ctrl+O", PaletteEntryKind.Command, () => { if (CanOpenOutput()) { OpenOutput(); } }),
+            new("Open outputs folder", _appPaths.OutputsDirectory, "Ctrl+Shift+O", PaletteEntryKind.Command, OpenOutputs),
+            new("Save preset", "Save the active preset", "Ctrl+S", PaletteEntryKind.Command, () => { SaveCurrentPreset(); }),
+            new("Save preset as…", "Copy the active preset under a new name", "Ctrl+Shift+S", PaletteEntryKind.Command, () => Presets.SavePresetAsCommand.Execute(null)),
+            new("Discard preset changes", "Restore the saved preset state", null, PaletteEntryKind.Command, () => Presets.DiscardChangesCommand.Execute(null)),
+            new("Toggle theme", ThemeManager.IsDark ? "Switch to the light theme" : "Switch to the dark theme", null, PaletteEntryKind.Command, () => ThemeToggleRequested?.Invoke(this, EventArgs.Empty)),
+            new("Toggle density", ThemeManager.AppliedDensity == DensityMode.Compact ? "Comfortable density" : "Compact density", null, PaletteEntryKind.Command, () => DensityToggleRequested?.Invoke(this, EventArgs.Empty)),
+            new("Toggle left panel", "Show/hide the settings panel", "Ctrl+B", PaletteEntryKind.Command, () => ToggleLeftPanelCommand.Execute(null)),
+            new("Toggle right panel", "Show/hide the inspector", "Ctrl+J", PaletteEntryKind.Command, () => ToggleRightPanelCommand.Execute(null)),
+            new("Show plan full-screen", "Expand the plan to the whole workspace", null, PaletteEntryKind.Command, () => { Inspector.ActiveTab = InspectorTab.Plan; IsInspectorExpanded = true; }),
+            new("Show preview full-screen", "Expand the preview to the whole workspace", null, PaletteEntryKind.Command, () => { Inspector.ActiveTab = InspectorTab.Preview; IsInspectorExpanded = true; }),
+            new("About", $"Version {ApplicationVersion}", null, PaletteEntryKind.Command, () => AboutRequested?.Invoke(this, EventArgs.Empty)),
+        };
+
+        if (Tree.SelectedNode is { IsPlaceholder: false } selected)
+        {
+            var name = selected.DisplayName;
+            commands.Add(new($"Exclude {name}", "Set the collection mode to Excluded", null, PaletteEntryKind.Command, () => ApplyModeToNodes([selected], CollectionMode.Excluded)));
+            commands.Add(new($"Reset rule on {name}", "Remove the local rule", null, PaletteEntryKind.Command, () => ResetLocalRuleFor(selected)));
+        }
+
+        Palette.SetEntries(commands);
+    }
+
+    private void UpdatePaletteResults()
+    {
+        if (!Palette.IsOpen)
+        {
+            return;
+        }
+
+        var query = Palette.Query.Trim();
+        if (query.Length == 0)
+        {
+            RebuildPaletteCommands();
+            return;
+        }
+
+        var results = new List<PaletteEntry>();
+        RebuildPaletteCommands();
+        foreach (var command in Palette.Entries.ToList())
+        {
+            if (command.Title.Contains(query, StringComparison.OrdinalIgnoreCase) ||
+                (command.Detail?.Contains(query, StringComparison.OrdinalIgnoreCase) ?? false))
+            {
+                results.Add(command);
+            }
+        }
+
+        var seenPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        if (_inventorySnapshot is not null)
+        {
+            foreach (var file in _inventorySnapshot.Files)
+            {
+                if (results.Count >= 20)
+                {
+                    break;
+                }
+
+                if (file.RelativePath.Contains(query, StringComparison.OrdinalIgnoreCase) ||
+                    Path.GetFileName(file.RelativePath).Contains(query, StringComparison.OrdinalIgnoreCase))
+                {
+                    if (seenPaths.Add(file.RelativePath))
+                    {
+                        var path = file.RelativePath;
+                        results.Add(new(Path.GetFileName(file.RelativePath), path, null, PaletteEntryKind.File, () => TryRevealInTree(path)));
+                    }
+                }
+            }
+        }
+
+        Palette.SetEntries(results.Take(25).ToList());
+    }
+
+    // ===== Helpers =====
+
+    private bool CanGenerateReport()
+    {
+        return !IsGeneratingReport && _currentPlan is not null;
+    }
+
+    private bool CanOpenOutput()
+    {
+        return !string.IsNullOrWhiteSpace(LastOutputPath) && File.Exists(LastOutputPath);
+    }
+
+    partial void OnLastOutputPathChanged(string? value)
+    {
+        OpenOutputCommand.NotifyCanExecuteChanged();
+    }
+
+    partial void OnIsGeneratingReportChanged(bool value)
+    {
+        GenerateReportCommand.NotifyCanExecuteChanged();
     }
 
     private static ScanOptions CloneScanOptions(ScanOptions source)
@@ -1301,18 +2161,6 @@ public sealed partial class MainWindowViewModel : ObservableObject
         return node.IsDirectory ? PathRuleKind.Directory : PathRuleKind.File;
     }
 
-    private static string GetModeText(CollectionMode mode)
-    {
-        return mode switch
-        {
-            CollectionMode.Full => "Full",
-            CollectionMode.Signatures => "Signatures",
-            CollectionMode.Listed => "Listed",
-            CollectionMode.Excluded => "Excluded",
-            _ => throw new ArgumentOutOfRangeException(nameof(mode), mode, null)
-        };
-    }
-
     private bool IsApplicationPath(string path)
     {
         var normalizedApplicationDirectory = Path.TrimEndingDirectorySeparator(_appPaths.ApplicationDirectory) + Path.DirectorySeparatorChar;
@@ -1327,6 +2175,13 @@ public sealed partial class MainWindowViewModel : ObservableObject
             Path.TrimEndingDirectorySeparator(rootPath),
             Path.TrimEndingDirectorySeparator(_appPaths.ApplicationDirectory),
             StringComparison.OrdinalIgnoreCase);
+    }
+
+    private void RestorePresetSelection()
+    {
+        _suppressPresetSelection = true;
+        Presets.SelectedPresetId = _activePreset.Id;
+        _suppressPresetSelection = false;
     }
 
     private sealed record PresetState(

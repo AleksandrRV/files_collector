@@ -33,6 +33,8 @@ public sealed partial class PrefixPresetsViewModel : ObservableObject
 
     public bool HasSelection => _activePreset is not null;
 
+    public int ContentLength => Content.Length;
+
     public event EventHandler<PresetNameRequestEventArgs>? NameRequested;
 
     public event EventHandler<UnsavedChangesRequestEventArgs>? UnsavedChangesRequested;
@@ -198,6 +200,7 @@ public sealed partial class PrefixPresetsViewModel : ObservableObject
     partial void OnContentChanged(string value)
     {
         IsDirty = _activePreset is not null && !string.Equals(value, _savedContent, StringComparison.Ordinal);
+        OnPropertyChanged(nameof(ContentLength));
         StateChanged?.Invoke(this, EventArgs.Empty);
     }
 

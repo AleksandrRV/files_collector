@@ -1,0 +1,111 @@
+<UserControl x:Class="FilesCollector.App.Controls.PatternEditor"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             Focusable="False">
+  <UserControl.Resources>
+    <Style x:Key="QuickChipButton" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+      <Setter Property="FontSize" Value="11" />
+      <Setter Property="FontFamily" Value="Cascadia Code, Consolas" />
+      <Setter Property="Padding" Value="8,2" />
+      <Setter Property="Margin" Value="0,0,6,0" />
+      <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}" />
+      <Setter Property="BorderBrush" Value="{DynamicResource BorderBrush}" />
+    </Style>
+  </UserControl.Resources>
+  <StackPanel>
+    <ItemsControl x:Name="PatternsList">
+      <ItemsControl.ItemTemplate>
+        <DataTemplate>
+          <Grid Margin="0,2" Background="Transparent">
+            <Grid.ColumnDefinitions>
+              <ColumnDefinition Width="Auto" />
+              <ColumnDefinition Width="*" />
+              <ColumnDefinition Width="Auto" />
+              <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <ToggleButton Grid.Column="0"
+                          Width="24"
+                          Height="22"
+                          Cursor="Hand"
+                          ToolTip="Enable / disable this pattern"
+                          IsChecked="{Binding IsEnabled, Mode=TwoWay}"
+                          Tag="{Binding}"
+                          Click="OnToggleClick">
+              <ToggleButton.Style>
+                <Style TargetType="ToggleButton">
+                  <Setter Property="Template">
+                    <Setter.Value>
+                      <ControlTemplate TargetType="ToggleButton">
+                        <Grid Background="Transparent">
+                          <TextBlock x:Name="EyeIcon"
+                                     FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                     FontSize="13"
+                                     HorizontalAlignment="Center"
+                                     VerticalAlignment="Center"
+                                     Text="&#xE7B3;"
+                                     Foreground="{DynamicResource TextSecondaryBrush}" />
+                        </Grid>
+                        <ControlTemplate.Triggers>
+                          <Trigger Property="IsChecked" Value="False">
+                            <Setter TargetName="EyeIcon" Property="Text" Value="&#xE7B4;" />
+                            <Setter TargetName="EyeIcon" Property="Foreground" Value="{DynamicResource TextTertiaryBrush}" />
+                          </Trigger>
+                        </ControlTemplate.Triggers>
+                      </ControlTemplate>
+                    </Setter.Value>
+                  </Setter>
+                </Style>
+              </ToggleButton.Style>
+            </ToggleButton>
+            <TextBlock Grid.Column="1"
+                       Margin="6,0"
+                       VerticalAlignment="Center"
+                       FontFamily="Cascadia Code, Consolas"
+                       FontSize="12"
+                       Text="{Binding Text}"
+                       TextTrimming="CharacterEllipsis"
+                       ToolTip="{Binding Text}"
+                       Foreground="{DynamicResource TextPrimaryBrush}" />
+            <TextBlock Grid.Column="2"
+                       Margin="8,0"
+                       VerticalAlignment="Center"
+                       FontSize="11"
+                       Text="{Binding MatchCountText}"
+                       Foreground="{DynamicResource TextTertiaryBrush}" />
+            <Button Grid.Column="3"
+                    Style="{StaticResource IconButton}"
+                    Width="22"
+                    Height="22"
+                    FontSize="11"
+                    Content="&#xE711;"
+                    ToolTip="Remove pattern"
+                    Tag="{Binding}"
+                    Click="OnRemoveClick" />
+          </Grid>
+        </DataTemplate>
+      </ItemsControl.ItemTemplate>
+    </ItemsControl>
+    <Grid Margin="0,4,0,0">
+      <Grid.ColumnDefinitions>
+        <ColumnDefinition Width="*" />
+        <ColumnDefinition Width="Auto" />
+      </Grid.ColumnDefinitions>
+      <TextBox x:Name="AddBox"
+               Grid.Column="0"
+               FontFamily="Cascadia Code, Consolas"
+               FontSize="12"
+               ToolTip="Add a pattern, e.g. **/bin/**" />
+      <Button Grid.Column="1"
+              Margin="6,0,0,0"
+              Padding="10,4"
+              Content="Add"
+              Click="OnAddClick" />
+    </Grid>
+    <WrapPanel x:Name="QuickChips" Margin="0,6,0,0">
+      <Button Style="{StaticResource QuickChipButton}" Content="**/bin/**" Tag="**/bin/**" Click="OnQuickChipClick" />
+      <Button Style="{StaticResource QuickChipButton}" Content="**/obj/**" Tag="**/obj/**" Click="OnQuickChipClick" />
+      <Button Style="{StaticResource QuickChipButton}" Content="**/.git/**" Tag="**/.git/**" Click="OnQuickChipClick" />
+      <Button Style="{StaticResource QuickChipButton}" Content="**/node_modules/**" Tag="**/node_modules/**" Click="OnQuickChipClick" />
+    </WrapPanel>
+  </StackPanel>
+</UserControl>

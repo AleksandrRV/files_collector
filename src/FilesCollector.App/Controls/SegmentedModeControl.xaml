@@ -1,0 +1,45 @@
+<UserControl x:Class="FilesCollector.App.Controls.SegmentedModeControl"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             Focusable="False">
+  <Border Background="{DynamicResource SurfaceAltBrush}" CornerRadius="8" Padding="3">
+    <Grid>
+      <Grid.ColumnDefinitions>
+        <ColumnDefinition Width="*" />
+        <ColumnDefinition Width="*" />
+        <ColumnDefinition Width="*" />
+        <ColumnDefinition Width="*" />
+      </Grid.ColumnDefinitions>
+      <ToggleButton x:Name="FullButton"
+                    Grid.Column="0"
+                    Style="{StaticResource SegmentButton}"
+                    Margin="1"
+                    Content="Full"
+                    Click="OnModeButtonClick"
+                    Tag="Full" />
+      <ToggleButton x:Name="SignaturesButton"
+                    Grid.Column="1"
+                    Style="{StaticResource SegmentButton}"
+                    Margin="1"
+                    Content="Sig"
+                    ToolTip="Signatures"
+                    Click="OnModeButtonClick"
+                    Tag="Signatures" />
+      <ToggleButton x:Name="ListedButton"
+                    Grid.Column="2"
+                    Style="{StaticResource SegmentButton}"
+                    Margin="1"
+                    Content="Listed"
+                    Click="OnModeButtonClick"
+                    Tag="Listed" />
+      <ToggleButton x:Name="ExcludedButton"
+                    Grid.Column="3"
+                    Style="{StaticResource SegmentButton}"
+                    Margin="1"
+                    Content="Excl"
+                    ToolTip="Excluded"
+                    Click="OnModeButtonClick"
+                    Tag="Excluded" />
+    </Grid>
+  </Border>
+</UserControl>

@@ -1,0 +1,96 @@
+<UserControl x:Class="FilesCollector.App.Toasts.ToastHost"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:toasts="clr-namespace:FilesCollector.App.Toasts">
+  <UserControl.Resources>
+    <BooleanToVisibilityConverter x:Key="BooleanToVisibilityConverter" />
+    <Style x:Key="ToastActionButton" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+      <Setter Property="FontSize" Value="12" />
+      <Setter Property="Padding" Value="10,3" />
+      <Setter Property="Margin" Value="6,0,0,0" />
+      <Setter Property="VerticalAlignment" Value="Center" />
+    </Style>
+  </UserControl.Resources>
+  <ItemsControl x:Name="ToastsList"
+                VerticalAlignment="Bottom"
+                HorizontalAlignment="Right"
+                Margin="0,0,16,16"
+                MaxWidth="380"
+                ItemsSource="{Binding Items}">
+    <ItemsControl.ItemsPanel>
+      <ItemsPanelTemplate>
+        <StackPanel Orientation="Vertical" VerticalAlignment="Bottom" HorizontalAlignment="Right" />
+      </ItemsPanelTemplate>
+    </ItemsControl.ItemsPanel>
+    <ItemsControl.ItemTemplate>
+      <DataTemplate DataType="{x:Type toasts:ToastMessage}">
+        <Border Style="{StaticResource Card}"
+                Margin="0,0,0,8"
+                Width="380"
+                Padding="12"
+                BorderThickness="1"
+                Effect="{StaticResource PopupShadow}">
+          <Grid>
+            <Grid.ColumnDefinitions>
+              <ColumnDefinition Width="Auto" />
+              <ColumnDefinition Width="*" />
+              <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <TextBlock x:Name="KindIcon"
+                       Grid.Column="0"
+                       FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                       FontSize="15"
+                       Margin="0,0,10,0"
+                       VerticalAlignment="Top">
+              <TextBlock.Style>
+                <Style TargetType="TextBlock">
+                  <Setter Property="Text" Value="&#xE946;" />
+                  <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}" />
+                  <Style.Triggers>
+                    <DataTrigger Binding="{Binding Kind}" Value="Success">
+                      <Setter Property="Text" Value="&#xE73E;" />
+                      <Setter Property="Foreground" Value="{DynamicResource SuccessBrush}" />
+                    </DataTrigger>
+                    <DataTrigger Binding="{Binding Kind}" Value="Warning">
+                      <Setter Property="Text" Value="&#xE7BA;" />
+                      <Setter Property="Foreground" Value="{DynamicResource WarningBrush}" />
+                    </DataTrigger>
+                    <DataTrigger Binding="{Binding Kind}" Value="Error">
+                      <Setter Property="Text" Value="&#xE783;" />
+                      <Setter Property="Foreground" Value="{DynamicResource ErrorBrush}" />
+                    </DataTrigger>
+                  </Style.Triggers>
+                </Style>
+              </TextBlock.Style>
+            </TextBlock>
+            <StackPanel Grid.Column="1">
+              <TextBlock Text="{Binding Title}" FontWeight="SemiBold" FontSize="13" Foreground="{DynamicResource TextPrimaryBrush}" TextWrapping="Wrap" />
+              <TextBlock Text="{Binding Detail}" FontSize="12" Foreground="{DynamicResource TextSecondaryBrush}" TextWrapping="Wrap" Margin="0,2,0,0" />
+              <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                <Button Style="{StaticResource ToastActionButton}"
+                        Content="{Binding ActionLabel}"
+                        Tag="{Binding}"
+                        Click="OnActionClick"
+                        Visibility="{Binding HasAction, Converter={StaticResource BooleanToVisibilityConverter}}" />
+                <Button Style="{StaticResource ToastActionButton}"
+                        Content="{Binding SecondaryActionLabel}"
+                        Tag="{Binding}"
+                        Click="OnSecondaryActionClick"
+                        Visibility="{Binding SecondaryActionLabel, Converter={StaticResource StringNullOrEmptyToVisibilityConverter}}" />
+              </StackPanel>
+            </StackPanel>
+            <Button Grid.Column="2"
+                    Style="{StaticResource IconButton}"
+                    Width="24"
+                    Height="24"
+                    FontSize="11"
+                    Content="&#xE711;"
+                    Tag="{Binding}"
+                    Click="OnCloseClick"
+                    VerticalAlignment="Top" />
+          </Grid>
+        </Border>
+      </DataTemplate>
+    </ItemsControl.ItemTemplate>
+  </ItemsControl>
+</UserControl>
