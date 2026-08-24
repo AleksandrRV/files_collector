@@ -1,0 +1,88 @@
+# Visual Studio, Rider and VS Code
+.vs/
+.idea/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+*.rsuser
+.vscode/
+
+# .NET build output
+**/bin/
+**/obj/
+**/[Bb]uild/
+**/[Dd]ebug/
+**/[Rr]elease/
+**/TestResults/
+*.dll
+*.exe
+*.pdb
+*.deps.json
+*.runtimeconfig.json
+*.runtimeconfig.dev.json
+*.cache
+
+# NuGet and local package data
+.nuget/
+packages/
+*.nupkg
+*.snupkg
+project.lock.json
+
+# Test and analysis artifacts
+coverage/
+Coverage/
+coverage.*
+TestResults/
+*.trx
+*.coverage
+*.coveragexml
+*.opencover.xml
+*.lcov
+BenchmarkDotNet.Artifacts/
+
+# Release and publish artifacts
+src/.artifacts/
+src/**/publish/
+artifacts/
+publish/
+release/
+*.zip
+*.zip.sha256
+*.msix
+*.msixbundle
+*.appx
+*.appxbundle
+
+# Files Collector runtime data
+FilesCollector.exe
+portable.mode
+outputs/**
+!outputs/.gitkeep
+outputs/app-data/
+
+# Runtime logs and temporary files
+*.log
+*.tmp
+*.bak
+*.swp
+*.swo
+
+# OS-generated files
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+.DS_Store
+
+# Local environment and secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.pfx
+*.p12
+secrets.json
+appsettings.Development.json
