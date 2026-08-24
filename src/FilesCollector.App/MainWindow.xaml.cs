@@ -126,7 +126,7 @@ public partial class MainWindow : Window
             // Mica is a progressive enhancement; fall back to the solid background.
             if (Background is not SolidColorBrush || !ReferenceEquals(Background, Brushes.Transparent))
             {
-                Background = (Brush)Application.Current.Resources["WindowBackgroundBrush"];
+                Background = (Brush)Application.Current!.Resources["WindowBackgroundBrush"];
             }
         }
     }
@@ -401,10 +401,10 @@ public partial class MainWindow : Window
             return;
         }
 
-        if (modifiers == ModifierKeys.Shift && _multiAnchor is not null)
+        if (modifiers == ModifierKeys.Shift && _multiAnchor is { } anchor)
         {
             var flat = FlattenVisibleNodes();
-            var anchorIndex = flat.IndexOf(_multiAnchor);
+            var anchorIndex = flat.IndexOf(anchor);
             var nodeIndex = flat.IndexOf(node);
             if (anchorIndex >= 0 && nodeIndex >= 0)
             {

@@ -15,8 +15,8 @@ public sealed class AboutDialog : Window
         ResizeMode = ResizeMode.NoResize;
         WindowStartupLocation = WindowStartupLocation.CenterOwner;
         ShowInTaskbar = false;
-        Background = (Brush)Application.Current.Resources["SurfaceRaisedBrush"];
-        Foreground = (Brush)Application.Current.Resources["TextPrimaryBrush"];
+        Background = (Brush)Application.Current!.Resources["SurfaceRaisedBrush"];
+        Foreground = (Brush)Application.Current!.Resources["TextPrimaryBrush"];
 
         var root = new StackPanel { Margin = new Thickness(18) };
         var heading = new TextBlock
@@ -61,7 +61,7 @@ public sealed class AboutDialog : Window
             Text = text,
             FontSize = 11,
             FontWeight = FontWeights.SemiBold,
-            Foreground = (Brush)Application.Current.Resources["TextTertiaryBrush"],
+            Foreground = (Brush)Application.Current!.Resources["TextTertiaryBrush"],
             Margin = new Thickness(0, 12, 0, 2)
         });
     }

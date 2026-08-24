@@ -45,6 +45,11 @@ public sealed class ToastService
         Items.Remove(toast);
     }
 
+    public void Stop()
+    {
+        _timer.Stop();
+    }
+
     private void OnTimerTick(object? sender, EventArgs e)
     {
         var now = System.DateTime.UtcNow;

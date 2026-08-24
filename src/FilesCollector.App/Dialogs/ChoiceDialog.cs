@@ -17,8 +17,8 @@ public sealed class ChoiceDialog : Window
         ResizeMode = ResizeMode.NoResize;
         WindowStartupLocation = WindowStartupLocation.CenterOwner;
         ShowInTaskbar = false;
-        Background = (Brush)Application.Current.Resources["SurfaceRaisedBrush"];
-        Foreground = (Brush)Application.Current.Resources["TextPrimaryBrush"];
+        Background = (Brush)Application.Current!.Resources["SurfaceRaisedBrush"];
+        Foreground = (Brush)Application.Current!.Resources["TextPrimaryBrush"];
 
         var root = new StackPanel { Margin = new Thickness(18) };
         var messageText = new TextBlock
@@ -43,7 +43,7 @@ public sealed class ChoiceDialog : Window
             };
             if (isDanger)
             {
-                button.Style = (Style)Application.Current.Resources["DangerButton"];
+                button.Style = (Style)Application.Current!.Resources["DangerButton"];
             }
             if (index == 0)
             {

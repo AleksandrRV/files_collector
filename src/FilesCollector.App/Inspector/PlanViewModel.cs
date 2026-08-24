@@ -137,7 +137,7 @@ public sealed partial class PlanViewModel : ObservableObject
         TopReasons.Clear();
         foreach (var group in plan.Items
                      .Where(item => item.Reason is not null)
-                     .GroupBy(item => item.Reason)
+                     .GroupBy(item => item.Reason!)
                      .OrderByDescending(group => group.Count())
                      .Take(6))
         {

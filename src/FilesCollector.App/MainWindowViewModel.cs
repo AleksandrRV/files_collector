@@ -355,6 +355,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
 
     public void Shutdown()
     {
+        Toasts.Stop();
         _inventoryRefreshCancellation?.Cancel();
         _inventoryRefreshCancellation?.Dispose();
         _generationCancellation?.Cancel();
