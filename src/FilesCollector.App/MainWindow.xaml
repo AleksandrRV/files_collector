@@ -1163,21 +1163,21 @@
                               Margin="1"
                               Content="Details"
                               Command="{Binding Inspector.SetTabCommand}"
-                              CommandParameter="Details"
+                              CommandParameter="{Binding Converter={StaticResource StringToInspectorTabConverter}, ConverterParameter=Details}"
                               IsChecked="{Binding Inspector.ActiveTab, Converter={StaticResource SectionEqualsConverter}, ConverterParameter=Details, Mode=OneWay}" />
                 <ToggleButton Grid.Column="1"
                               Style="{StaticResource SegmentButton}"
                               Margin="1"
                               Content="Plan"
                               Command="{Binding Inspector.SetTabCommand}"
-                              CommandParameter="Plan"
+                              CommandParameter="{Binding Converter={StaticResource StringToInspectorTabConverter}, ConverterParameter=Plan}"
                               IsChecked="{Binding Inspector.ActiveTab, Converter={StaticResource SectionEqualsConverter}, ConverterParameter=Plan, Mode=OneWay}" />
                 <ToggleButton Grid.Column="2"
                               Style="{StaticResource SegmentButton}"
                               Margin="1"
                               Content="Preview"
                               Command="{Binding Inspector.SetTabCommand}"
-                              CommandParameter="Preview"
+                              CommandParameter="{Binding Converter={StaticResource StringToInspectorTabConverter}, ConverterParameter=Preview}"
                               IsChecked="{Binding Inspector.ActiveTab, Converter={StaticResource SectionEqualsConverter}, ConverterParameter=Preview, Mode=OneWay}" />
               </Grid>
             </Border>
