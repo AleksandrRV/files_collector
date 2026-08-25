@@ -68,6 +68,54 @@ public sealed class RuleSetTests
         rules.Resolve("app/assets/icons/logo.svg", PathRuleKind.File).Mode.Should().Be(CollectionMode.Listed);
     }
 
+    [Fact]
+    public void Removing_descendant_rules_keeps_the_directory_rule_itself()
+    {
+        var rules = new RuleSet();
+        rules.SetRule("app", PathRuleKind.Directory, CollectionMode.Excluded);
+        rules.SetRule("app/src", PathRuleKind.Directory, CollectionMode.Signatures);
+        rules.SetRule("app/src/App.cs", PathRuleKind.File, CollectionMode.Full);
+        rules.SetRule("other/file.txt", PathRuleKind.File, CollectionMode.Listed);
+
+        var removed = rules.RemoveDescendantRules("app");
+
+        removed.Should().Be(2);
+        rules.Rules.Should().HaveCount(2);
+        rules.Rules.Should().Contain(rule => rule.RelativePath == "app" && rule.Kind == PathRuleKind.Directory);
+        rules.Rules.Should().Contain(rule => rule.RelativePath == "other/file.txt");
+        var resolution = rules.Resolve("app/src/App.cs", PathRuleKind.File);
+        resolution.Mode.Should().Be(CollectionMode.Excluded);
+        resolution.Source.Should().Be(RuleSource.Inherited);
+    }
+
+    [Fact]
+    public void Removing_descendants_of_the_root_clears_all_inner_rules_but_keeps_root()
+    {
+        var rules = new RuleSet();
+        rules.SetRule("", PathRuleKind.Directory, CollectionMode.Signatures);
+        rules.SetRule("a/b.cs", PathRuleKind.File, CollectionMode.Listed);
+        rules.SetRule("c", PathRuleKind.Directory, CollectionMode.Excluded);
+
+        var removed = rules.RemoveDescendantRules("");
+
+        removed.Should().Be(2);
+        rules.Rules.Should().ContainSingle().Which.RelativePath.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void Descendant_removal_is_case_insensitive()
+    {
+        var rules = new RuleSet();
+        rules.SetRule("app/src", PathRuleKind.Directory, CollectionMode.Signatures);
+        rules.SetRule("app/keep.txt", PathRuleKind.File, CollectionMode.Listed);
+        rules.SetRule("elsewhere/x.txt", PathRuleKind.File, CollectionMode.Listed);
+
+        var removed = rules.RemoveDescendantRules("APP");
+
+        removed.Should().Be(2);
+        rules.Rules.Should().HaveCount(1);
+    }
+
     [Theory]
     [InlineData("app\\src\\Program.cs", "app/src/Program.cs")]
     [InlineData("/app/src/", "app/src")]

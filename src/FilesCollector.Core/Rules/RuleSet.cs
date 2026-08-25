@@ -35,6 +35,27 @@ public sealed class RuleSet
         return _rules.RemoveAll(rule => rule.Kind == kind && string.Equals(rule.RelativePath, normalizedPath, StringComparison.OrdinalIgnoreCase)) > 0;
     }
 
+    /// <summary>
+    /// Removes every rule located strictly inside the directory (the directory's own
+    /// rule is kept), so all inner files and folders fall back to the inherited mode.
+    /// </summary>
+    public int RemoveDescendantRules(string directoryRelativePath)
+    {
+        var normalizedPath = NormalizeRelativePath(directoryRelativePath);
+        return _rules.RemoveAll(rule => IsStrictDescendantOf(rule.RelativePath, normalizedPath));
+    }
+
+    private static bool IsStrictDescendantOf(string candidatePath, string directoryPath)
+    {
+        if (string.IsNullOrEmpty(directoryPath))
+        {
+            // The root directory: everything except the root itself is a descendant.
+            return !string.IsNullOrEmpty(candidatePath);
+        }
+
+        return candidatePath.StartsWith(directoryPath + "/", StringComparison.OrdinalIgnoreCase);
+    }
+
     public RuleResolution Resolve(string relativePath, PathRuleKind kind, bool isSystemExcluded = false)
     {
         if (isSystemExcluded)
@@ -53,9 +74,11 @@ public sealed class RuleSet
         }
 
         var inheritedRule = _rules
-            .Where(rule => rule.Kind == PathRuleKind.Directory && IsSameOrDescendant(normalizedPath, rule.RelativePath))
-            .OrderByDescending(rule => rule.RelativePath.Length)
-            .ThenByDescending(rule => _rules.IndexOf(rule))
+            .Select((rule, position) => (Rule: rule, Position: position))
+            .Where(pair => pair.Rule.Kind == PathRuleKind.Directory && IsSameOrDescendant(normalizedPath, pair.Rule.RelativePath))
+            .OrderByDescending(pair => pair.Rule.RelativePath.Length)
+            .ThenByDescending(pair => pair.Position)
+            .Select(pair => pair.Rule)
             .FirstOrDefault();
 
         if (inheritedRule is not null)

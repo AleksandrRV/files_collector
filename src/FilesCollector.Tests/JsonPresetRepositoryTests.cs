@@ -51,6 +51,43 @@ public sealed class JsonPresetRepositoryTests : IDisposable
     }
 
     [Fact]
+    public void Save_with_a_locked_index_keeps_the_preset_file_and_recovers_on_retry()
+    {
+        var repository = CreateRepository();
+        var now = DateTimeOffset.Now;
+        var alphaId = Guid.NewGuid();
+        repository.Save(new Preset { Id = alphaId, Name = "Alpha", CreatedAt = now, UpdatedAt = now });
+
+        var executablePath = Path.Combine(_testDirectory, "files-collector", "FilesCollector.exe");
+        var presetsDirectory = Path.Combine(new AppPaths(executablePath, _testDirectory).LocalDataDirectory, "presets");
+        var indexPath = Path.Combine(presetsDirectory, "index.json");
+        var betaId = Guid.NewGuid();
+        var beta = new Preset { Id = betaId, Name = "Beta", CreatedAt = now, UpdatedAt = now };
+
+        try
+        {
+            using (File.Open(indexPath, FileMode.Open, FileAccess.Read, FileShare.None))
+            {
+                repository.Save(beta);
+            }
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            // Expected when the active lock prevents replacing index.json
+            // (on Windows File.Move over a locked target reports access denied).
+        }
+
+        // The preset file survives even though its index entry could not be written...
+        File.Exists(Path.Combine(presetsDirectory, $"{betaId:N}.json")).Should().BeTrue();
+
+        // ...and saving again once the lock is released restores full consistency:
+        // neither Alpha nor Beta disappears from the repository.
+        repository.Save(beta);
+        CreateRepository().GetAll().Select(preset => preset.Name)
+            .Should().Contain(new[] { "Alpha", "Beta" });
+    }
+
+    [Fact]
     public void Default_preset_cannot_be_deleted()
     {
         var repository = CreateRepository();

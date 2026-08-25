@@ -49,6 +49,10 @@ public sealed class JsonFileInventoryStore : IFileInventoryStore
         {
             return null;
         }
+        catch (UnauthorizedAccessException)
+        {
+            return null;
+        }
     }
 
     public FileInventorySnapshot Refresh(string rootPath, string? excludedDirectoryPath, IProgress<InventoryRefreshProgress>? progress, CancellationToken cancellationToken)

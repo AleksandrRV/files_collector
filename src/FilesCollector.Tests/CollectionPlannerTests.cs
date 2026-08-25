@@ -71,6 +71,26 @@ public sealed class CollectionPlannerTests
         plan.Items.Should().ContainSingle().Which.Reason.Should().Be("size_limit");
     }
 
+    [Fact]
+    public void Exclude_pattern_without_a_slash_matches_files_in_any_directory()
+    {
+        var root = Path.GetFullPath(Path.Combine(Path.GetTempPath(), "FilesCollectorTests", "planner-basename"));
+        var nestedFilePath = Path.Combine(root, "logs", "app", "trace.log");
+        var fileSystem = new TestFileSystem(new Dictionary<string, IReadOnlyList<FileSystemEntry>>
+        {
+            [root] = [DirectoryEntry(Path.Combine(root, "logs"))],
+            [Path.Combine(root, "logs")] = [DirectoryEntry(Path.Combine(root, "logs", "app"))],
+            [Path.Combine(root, "logs", "app")] = [FileEntry(nestedFilePath)]
+        });
+        var planner = new CollectionPlanner(fileSystem);
+        var options = new ScanOptions { ExcludePatterns = ["*.log"] };
+
+        var plan = planner.CreatePlan(root, null, new RuleSet(), [], options);
+
+        plan.Items.Should().ContainSingle().Which.Mode.Should().Be(CollectionMode.Excluded);
+        plan.Items.Should().ContainSingle().Which.Reason.Should().Be("excluded_pattern");
+    }
+
     private static FileSystemEntry DirectoryEntry(string path)
     {
         return new FileSystemEntry(path, Path.GetFileName(path), EntryKind.Directory, false, false, false, null, true, null);

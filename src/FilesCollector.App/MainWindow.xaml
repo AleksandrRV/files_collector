@@ -3,6 +3,9 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:local="clr-namespace:FilesCollector.App"
         Title="Files Collector"
+        Background="{DynamicResource AppBackgroundBrush}"
+        Foreground="{DynamicResource TextPrimaryBrush}"
+        FontFamily="{DynamicResource InterfaceFont}"
         Width="1080"
         Height="700"
         MinWidth="820"
@@ -11,24 +14,63 @@
         PreviewKeyDown="OnWindowPreviewKeyDown">
   <Window.Resources>
     <BooleanToVisibilityConverter x:Key="BooleanToVisibilityConverter" />
+    <DataTemplate x:Key="PresetNameItemTemplate">
+      <TextBlock Text="{Binding Name}" TextTrimming="CharacterEllipsis" />
+    </DataTemplate>
     <HierarchicalDataTemplate DataType="{x:Type local:FileTreeNode}" ItemsSource="{Binding Children}">
-      <Grid x:Name="NodeRow" ToolTip="{Binding ToolTipText}">
-        <Grid.ColumnDefinitions>
-          <ColumnDefinition Width="58" />
-          <ColumnDefinition Width="*" />
-          <ColumnDefinition Width="105" />
-          <ColumnDefinition Width="90" />
-          <ColumnDefinition Width="112" />
-        </Grid.ColumnDefinitions>
-        <TextBlock Grid.Column="0" Text="{Binding IconText}" />
-        <TextBlock Grid.Column="1" Text="{Binding DisplayName}" TextTrimming="CharacterEllipsis" />
-        <TextBlock Grid.Column="2" Text="{Binding EffectiveModeText}" />
-        <TextBlock Grid.Column="3" Text="{Binding RuleSourceText}" />
-        <TextBlock Grid.Column="4" Foreground="Gray" Text="{Binding StatusText}" />
-      </Grid>
+      <DockPanel x:Name="NodeRow" LastChildFill="True" ToolTip="{Binding ToolTipText}">
+        <DockPanel.Style>
+          <Style TargetType="DockPanel">
+            <Style.Triggers>
+              <Trigger Property="IsMouseOver" Value="True">
+                <Setter Property="Background" Value="{DynamicResource SurfaceAltBrush}" />
+              </Trigger>
+            </Style.Triggers>
+          </Style>
+        </DockPanel.Style>
+        <StackPanel DockPanel.Dock="Right"
+                    Margin="10,0,0,0"
+                    Orientation="Horizontal"
+                    VerticalAlignment="Center">
+          <TextBlock x:Name="SourceText" Width="72" Text="{Binding RuleSourceText}" />
+          <TextBlock x:Name="ModeText" Width="92" TextTrimming="CharacterEllipsis" Text="{Binding EffectiveModeText}" />
+        </StackPanel>
+        <TextBlock Margin="4,0,0,0" Text="{Binding DisplayName}" TextTrimming="CharacterEllipsis" />
+      </DockPanel>
       <HierarchicalDataTemplate.Triggers>
         <DataTrigger Binding="{Binding IsDimmed}" Value="True">
           <Setter TargetName="NodeRow" Property="Opacity" Value="0.55" />
+        </DataTrigger>
+        <!-- Collection mode badges -->
+        <DataTrigger Binding="{Binding EffectiveMode}" Value="Full">
+          <Setter TargetName="ModeText" Property="Foreground" Value="{DynamicResource ModeFullBrush}" />
+          <Setter TargetName="ModeText" Property="FontWeight" Value="SemiBold" />
+        </DataTrigger>
+        <DataTrigger Binding="{Binding EffectiveMode}" Value="Signatures">
+          <Setter TargetName="ModeText" Property="Foreground" Value="{DynamicResource ModeSignaturesBrush}" />
+          <Setter TargetName="ModeText" Property="FontWeight" Value="SemiBold" />
+        </DataTrigger>
+        <DataTrigger Binding="{Binding EffectiveMode}" Value="Listed">
+          <Setter TargetName="ModeText" Property="Foreground" Value="{DynamicResource ModeListedBrush}" />
+          <Setter TargetName="ModeText" Property="FontWeight" Value="SemiBold" />
+        </DataTrigger>
+        <DataTrigger Binding="{Binding EffectiveMode}" Value="Excluded">
+          <Setter TargetName="ModeText" Property="Foreground" Value="{DynamicResource ModeExcludedBrush}" />
+          <Setter TargetName="ModeText" Property="TextDecorations" Value="Strikethrough" />
+        </DataTrigger>
+        <!-- Rule source markers -->
+        <DataTrigger Binding="{Binding RuleSource}" Value="Local">
+          <Setter TargetName="SourceText" Property="Foreground" Value="{DynamicResource AccentBrush}" />
+          <Setter TargetName="SourceText" Property="FontWeight" Value="SemiBold" />
+        </DataTrigger>
+        <DataTrigger Binding="{Binding RuleSource}" Value="Inherited">
+          <Setter TargetName="SourceText" Property="Foreground" Value="{DynamicResource TextSecondaryBrush}" />
+        </DataTrigger>
+        <DataTrigger Binding="{Binding RuleSource}" Value="Global">
+          <Setter TargetName="SourceText" Property="Foreground" Value="{DynamicResource TextSecondaryBrush}" />
+        </DataTrigger>
+        <DataTrigger Binding="{Binding RuleSource}" Value="System">
+          <Setter TargetName="SourceText" Property="Foreground" Value="{DynamicResource DangerBrush}" />
         </DataTrigger>
       </HierarchicalDataTemplate.Triggers>
     </HierarchicalDataTemplate>
@@ -39,7 +81,8 @@
     <KeyBinding Key="F5" Command="{Binding ReloadCommand}" />
   </Window.InputBindings>
 
-  <DockPanel LastChildFill="True" Margin="16">
+  <Grid>
+    <DockPanel LastChildFill="True" Margin="16">
     <StatusBar DockPanel.Dock="Bottom" Margin="0,16,0,0">
       <TextBlock Text="{Binding StatusText}" />
     </StatusBar>
@@ -50,6 +93,7 @@
         <RowDefinition Height="Auto" />
         <RowDefinition Height="*" />
         <RowDefinition Height="Auto" />
+        <RowDefinition Height="Auto" />
       </Grid.RowDefinitions>
 
       <Grid Grid.Row="0">
@@ -58,14 +102,47 @@
           <ColumnDefinition Width="*" />
           <ColumnDefinition Width="Auto" />
           <ColumnDefinition Width="Auto" />
+          <ColumnDefinition Width="Auto" />
         </Grid.ColumnDefinitions>
-        <TextBlock VerticalAlignment="Center" FontWeight="SemiBold" Text="Files Collector" />
-        <TextBlock Grid.Column="1" Margin="16,0,0,0" VerticalAlignment="Center" Foreground="Gray" Text="Step 7: report generation" />
-        <Button Grid.Column="2" Margin="0,0,8,0" MinWidth="130" Padding="12,5" Command="{Binding GenerateReportCommand}" Content="Create report" />
-        <Button Grid.Column="3" MinWidth="110" Padding="12,5" Command="{Binding ShowAboutCommand}" Content="About" />
+        <TextBlock VerticalAlignment="Center" FontWeight="SemiBold" Foreground="{DynamicResource TextPrimaryBrush}" Text="Files Collector" />
+        <StackPanel Grid.Column="1" Margin="16,0,0,0" Orientation="Horizontal" VerticalAlignment="Center">
+          <ComboBox Width="240"
+                    ItemTemplate="{StaticResource PresetNameItemTemplate}"
+                    ItemsSource="{Binding PresetItems}"
+                    SelectedValue="{Binding SelectedPresetId}"
+                    SelectedValuePath="Id"
+                    ToolTip="Active preset" />
+          <Ellipse Width="9"
+                   Height="9"
+                   Margin="8,0,0,0"
+                   VerticalAlignment="Center"
+                   Fill="{DynamicResource WarningBrush}"
+                   ToolTip="Unsaved preset changes">
+            <Ellipse.Style>
+              <Style TargetType="Ellipse">
+                <Setter Property="Visibility" Value="Collapsed" />
+                <Style.Triggers>
+                  <DataTrigger Binding="{Binding IsPresetDirty}" Value="True">
+                    <Setter Property="Visibility" Value="Visible" />
+                  </DataTrigger>
+                </Style.Triggers>
+              </Style>
+            </Ellipse.Style>
+          </Ellipse>
+        </StackPanel>
+        <Button x:Name="ThemeToggleButton"
+                Grid.Column="2"
+                Margin="0,0,8,0"
+                Style="{StaticResource IconButtonStyle}"
+                Click="OnToggleThemeClick"
+                ToolTip="Toggle light/dark theme">
+          <TextBlock Text="&#xE706;" FontFamily="Segoe MDL2 Assets" FontSize="14" />
+        </Button>
+        <Button Grid.Column="3" Margin="0,0,8,0" MinWidth="110" Command="{Binding ShowAboutCommand}" Content="About" />
+        <Button Grid.Column="4" MinWidth="140" Padding="16,6" Style="{StaticResource AccentButtonStyle}" Command="{Binding GenerateReportCommand}" Content="Create report" />
       </Grid>
 
-      <Border Grid.Row="1" Margin="0,18,0,12" Padding="12" BorderBrush="#D0D0D0" BorderThickness="1" CornerRadius="4">
+      <Border Grid.Row="1" Margin="0,14,0,12" Padding="12" Background="{DynamicResource SurfaceBrush}" BorderBrush="{DynamicResource SurfaceBorderBrush}" BorderThickness="1" CornerRadius="8">
         <Grid>
           <Grid.ColumnDefinitions>
             <ColumnDefinition Width="Auto" />
@@ -74,7 +151,7 @@
             <ColumnDefinition Width="Auto" />
             <ColumnDefinition Width="Auto" />
           </Grid.ColumnDefinitions>
-          <TextBlock VerticalAlignment="Center" FontWeight="SemiBold" Text="Scan root:" />
+          <TextBlock VerticalAlignment="Center" FontWeight="SemiBold" Foreground="{DynamicResource TextPrimaryBrush}" Text="Scan root:" />
           <TextBox Grid.Column="1" Margin="12,0" IsReadOnly="True" Text="{Binding ScanRoot}" />
           <Button Grid.Column="2" Margin="0,0,8,0" Padding="12,5" Command="{Binding RequestRootChangeCommand}" Content="Change..." />
           <Button Grid.Column="3" Margin="0,0,8,0" Padding="12,5" Command="{Binding ReloadCommand}" Content="Refresh tree" />
@@ -84,18 +161,34 @@
 
       <Grid Grid.Row="2">
         <Grid.ColumnDefinitions>
-          <ColumnDefinition Width="260" />
-          <ColumnDefinition Width="12" />
+          <ColumnDefinition Width="300" MinWidth="250" MaxWidth="560" />
+          <ColumnDefinition Width="Auto" />
           <ColumnDefinition Width="*" />
         </Grid.ColumnDefinitions>
+        <GridSplitter Grid.Column="1"
+                      Width="6"
+                      HorizontalAlignment="Stretch"
+                      VerticalAlignment="Stretch"
+                      Background="Transparent"
+                      ResizeBehavior="PreviousAndNext"
+                      ResizeDirection="Columns"
+                      Cursor="SizeWE">
+          <GridSplitter.Template>
+            <ControlTemplate TargetType="GridSplitter">
+              <Border Background="Transparent">
+                <Rectangle HorizontalAlignment="Center" Width="1" Fill="{DynamicResource SurfaceBorderBrush}" />
+              </Border>
+            </ControlTemplate>
+          </GridSplitter.Template>
+        </GridSplitter>
         <TabControl Grid.Column="0">
           <TabItem Header="Preset">
             <StackPanel Margin="10">
-              <ComboBox DisplayMemberPath="Name"
+              <ComboBox ItemTemplate="{StaticResource PresetNameItemTemplate}"
                         ItemsSource="{Binding PresetItems}"
                         SelectedValue="{Binding SelectedPresetId}"
                         SelectedValuePath="Id" />
-              <TextBlock Margin="0,8,0,0" Foreground="DarkOrange" Text="Unsaved changes" Visibility="{Binding IsPresetDirty, Converter={StaticResource BooleanToVisibilityConverter}}" />
+              <TextBlock Margin="0,8,0,0" Foreground="{DynamicResource WarningBrush}" FontWeight="SemiBold" Text="Unsaved changes" Visibility="{Binding IsPresetDirty, Converter={StaticResource BooleanToVisibilityConverter}}" />
               <WrapPanel Margin="0,10,0,0">
                 <Button Margin="0,0,8,8" Padding="10,4" Command="{Binding NewPresetCommand}" Content="New" />
                 <Button Margin="0,0,8,8" Padding="10,4" Command="{Binding SavePresetCommand}" Content="Save" />
@@ -103,25 +196,19 @@
                 <Button Margin="0,0,8,8" Padding="10,4" Command="{Binding RenamePresetCommand}" Content="Rename" />
                 <Button Margin="0,0,8,8" Padding="10,4" Command="{Binding DeletePresetCommand}" Content="Delete" />
                 <Button Margin="0,0,8,8" Padding="10,4" Command="{Binding DiscardPresetChangesCommand}" Content="Discard" />
+                <Button Margin="0,0,8,8" Padding="10,4" Command="{Binding ExportPresetCommand}" Content="Export..." />
+                <Button Margin="0,0,8,8" Padding="10,4" Command="{Binding ImportPresetCommand}" Content="Import..." />
               </WrapPanel>
-            </StackPanel>
-          </TabItem>
-          <TabItem Header="Search">
-            <StackPanel Margin="10">
-              <TextBlock Text="Search tree:" />
-              <TextBox Margin="0,4,0,10" Text="{Binding SearchText, UpdateSourceTrigger=PropertyChanged}" />
-              <CheckBox Content="Show files" IsChecked="{Binding ShowFiles}" />
-              <CheckBox Margin="0,6,0,0" Content="Show folders" IsChecked="{Binding ShowFolders}" />
-              <CheckBox Margin="0,6,0,0" Content="Local rules only" IsChecked="{Binding ShowLocalRulesOnly}" />
-              <CheckBox Margin="0,6,0,0" Content="Excluded only" IsChecked="{Binding ShowExcludedOnly}" />
-              <TextBlock Margin="0,16,0,4" Text="Selected item:" />
-              <TextBox IsReadOnly="True" AcceptsReturn="True" Height="110" Text="{Binding SelectedNodeDetails}" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" />
             </StackPanel>
           </TabItem>
           <TabItem Header="Formats">
             <DockPanel Margin="8">
               <CheckBox DockPanel.Dock="Top" Margin="0,0,0,8" Content="Include all extensions" IsChecked="{Binding IncludeAllExtensions}" />
-              <DataGrid AutoGenerateColumns="False" CanUserAddRows="False" CanUserDeleteRows="False" ItemsSource="{Binding ExtensionRuleItems}">
+              <DataGrid AutoGenerateColumns="False"
+                        CanUserAddRows="False"
+                        CanUserDeleteRows="False"
+                        ColumnHeaderStyle="{StaticResource DataGridColumnHeaderStyle}"
+                        ItemsSource="{Binding ExtensionRuleItems}">
                 <DataGrid.Columns>
                   <DataGridCheckBoxColumn Binding="{Binding Enabled, Mode=TwoWay}" Header="Use" />
                   <DataGridTextColumn Binding="{Binding Extension}" Header="Extension" IsReadOnly="True" />
@@ -145,29 +232,30 @@
                 <CheckBox Margin="0,6,0,0" Content="Follow reparse points" IsChecked="{Binding FollowReparsePoints}" />
                 <CheckBox Margin="0,6,0,0" Content="Redact root path in output" IsChecked="{Binding RedactRootPath}" />
                 <CheckBox Margin="0,6,0,0" Content="Include per-file YAML metadata blocks" IsChecked="{Binding IncludeFileMetadataBlocks}" />
-                <TextBlock Margin="0,12,0,2" Text="Inventory refresh interval, minutes (0 disables):" />
+                <TextBlock Margin="0,12,0,2" Foreground="{DynamicResource TextPrimaryBrush}" Text="Inventory refresh interval, minutes (0 disables):" />
                 <TextBox Text="{Binding InventoryRefreshMinutes, UpdateSourceTrigger=PropertyChanged}" />
-                <TextBlock Margin="0,4,0,2" Foreground="Gray" Text="{Binding InventoryStatus}" TextWrapping="Wrap" />
+                <TextBlock Margin="0,4,0,2" Foreground="{DynamicResource TextSecondaryBrush}" Text="{Binding InventoryStatus}" TextWrapping="Wrap" />
                 <Button Margin="0,4,0,0" Command="{Binding RefreshInventoryCommand}" Content="Refresh inventory now" />
-                <TextBlock Margin="0,12,0,2" Text="Maximum file size, KiB:" />
+                <TextBlock Margin="0,12,0,2" Foreground="{DynamicResource TextPrimaryBrush}" Text="Maximum file size, KiB:" />
                 <TextBox Text="{Binding MaxFileSizeKiB, UpdateSourceTrigger=PropertyChanged}" />
-                <TextBlock Margin="0,12,0,2" Text="Binary file mode:" />
+                <TextBlock Margin="0,12,0,2" Foreground="{DynamicResource TextPrimaryBrush}" Text="Binary file mode:" />
                 <ComboBox ItemsSource="{Binding CollectionModes}" SelectedItem="{Binding BinaryFileMode}" />
-                <TextBlock Margin="0,12,0,2" Text="Include patterns, one per line:" />
+                <TextBlock Margin="0,12,0,2" Foreground="{DynamicResource TextPrimaryBrush}" Text="Include patterns, one per line:" />
                 <TextBox AcceptsReturn="True" Height="80" Text="{Binding IncludePatternsText, UpdateSourceTrigger=PropertyChanged}" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" />
-                <TextBlock Margin="0,12,0,2" Text="Exclude patterns, one per line:" />
+                <TextBlock Margin="0,4,0,0" FontSize="12" Foreground="{DynamicResource TextSecondaryBrush}" Text="{Binding NotIncludedByPatternsText}" />
+                <TextBlock Margin="0,12,0,2" Foreground="{DynamicResource TextPrimaryBrush}" Text="Exclude patterns, one per line:" />
                 <TextBox AcceptsReturn="True" Height="80" Text="{Binding ExcludePatternsText, UpdateSourceTrigger=PropertyChanged}" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" />
-                <Button Margin="0,12,0,0" Command="{Binding RefreshPlanCommand}" Content="Refresh plan" />
+                <TextBlock Margin="0,4,0,0" FontSize="12" Foreground="{DynamicResource TextSecondaryBrush}" Text="{Binding ExcludedByPatternsText}" />
               </StackPanel>
             </ScrollViewer>
           </TabItem>
           <TabItem Header="Prefix">
             <StackPanel Margin="10">
-              <ComboBox DisplayMemberPath="Name"
+              <ComboBox ItemTemplate="{StaticResource PresetNameItemTemplate}"
                         ItemsSource="{Binding PrefixPresets.Items}"
                         SelectedValue="{Binding PrefixPresets.SelectedId}"
                         SelectedValuePath="Id" />
-              <TextBlock Margin="0,8,0,0" Foreground="DarkOrange" Text="Unsaved changes" Visibility="{Binding PrefixPresets.IsDirty, Converter={StaticResource BooleanToVisibilityConverter}}" />
+              <TextBlock Margin="0,8,0,0" Foreground="{DynamicResource WarningBrush}" FontWeight="SemiBold" Text="Unsaved changes" Visibility="{Binding PrefixPresets.IsDirty, Converter={StaticResource BooleanToVisibilityConverter}}" />
               <TextBox Margin="0,8,0,0" AcceptsReturn="True" Height="160" IsEnabled="{Binding PrefixPresets.HasSelection}" Text="{Binding PrefixPresets.Content, UpdateSourceTrigger=PropertyChanged}" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" />
               <WrapPanel Margin="0,10,0,0">
                 <Button Margin="0,0,8,8" Padding="10,4" Command="{Binding PrefixPresets.ClearSelectionCommand}" Content="No prefix" />
@@ -184,6 +272,25 @@
 
         <TabControl Grid.Column="2">
           <TabItem Header="File tree">
+            <DockPanel>
+            <Border DockPanel.Dock="Top"
+                    Margin="8"
+                    Padding="10,8"
+                    Background="{DynamicResource SurfaceBrush}"
+                    BorderBrush="{DynamicResource SurfaceBorderBrush}"
+                    BorderThickness="1"
+                    CornerRadius="8">
+              <StackPanel>
+                <TextBox Text="{Binding SearchText, UpdateSourceTrigger=PropertyChanged}"
+                         ToolTip="Filter the tree by name" />
+                <WrapPanel Margin="0,8,0,0">
+                  <CheckBox Margin="0,0,14,0" Content="Files" IsChecked="{Binding ShowFiles}" />
+                  <CheckBox Margin="0,0,14,0" Content="Folders" IsChecked="{Binding ShowFolders}" />
+                  <CheckBox Margin="0,0,14,0" Content="Local rules only" IsChecked="{Binding ShowLocalRulesOnly}" />
+                  <CheckBox Content="Excluded only" IsChecked="{Binding ShowExcludedOnly}" />
+                </WrapPanel>
+              </StackPanel>
+            </Border>
             <TreeView ItemsSource="{Binding RootNodes}"
                       SelectedItemChanged="OnSelectedItemChanged"
                       TreeViewItem.Expanded="OnTreeViewItemExpanded"
@@ -201,6 +308,7 @@
               <TreeView.ItemContainerStyle>
                 <Style TargetType="TreeViewItem">
                   <Setter Property="IsExpanded" Value="False" />
+                  <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
                   <Style.Triggers>
                     <DataTrigger Binding="{Binding IsVisible}" Value="False">
                       <Setter Property="Visibility" Value="Collapsed" />
@@ -209,17 +317,89 @@
                 </Style>
               </TreeView.ItemContainerStyle>
             </TreeView>
+            </DockPanel>
           </TabItem>
           <TabItem Header="Preview">
             <DockPanel Margin="8">
               <Button DockPanel.Dock="Top" HorizontalAlignment="Left" Margin="0,0,0,8" Command="{Binding RefreshPreviewCommand}" Content="Refresh preview" />
-              <TextBox IsReadOnly="True" AcceptsReturn="True" Text="{Binding PreviewText}" TextWrapping="NoWrap" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto" FontFamily="Consolas" />
+              <TextBox IsReadOnly="True"
+                       AcceptsReturn="True"
+                       Text="{Binding PreviewText}"
+                       TextWrapping="NoWrap"
+                       VerticalScrollBarVisibility="Auto"
+                       HorizontalScrollBarVisibility="Auto"
+                       FontFamily="{DynamicResource MonoFont}"
+                       FontSize="12" />
+            </DockPanel>
+          </TabItem>
+          <TabItem Header="History">
+            <DockPanel Margin="8">
+              <Button DockPanel.Dock="Top"
+                      HorizontalAlignment="Left"
+                      Margin="0,0,0,8"
+                      Command="{Binding RefreshReportHistoryCommand}"
+                      Content="Refresh history" />
+              <DataGrid ItemsSource="{Binding ReportHistory}"
+                        ColumnHeaderStyle="{StaticResource DataGridColumnHeaderStyle}"
+                        SelectionMode="Single"
+                        IsReadOnly="True">
+                <DataGrid.Columns>
+                  <DataGridTextColumn Header="Report" Binding="{Binding DisplayName}" Width="*" />
+                  <DataGridTextColumn Header="Created" Binding="{Binding Details}" Width="220" IsReadOnly="True" />
+                  <DataGridTemplateColumn Width="180">
+                    <DataGridTemplateColumn.CellTemplate>
+                      <DataTemplate>
+                        <StackPanel Orientation="Horizontal">
+                          <Button Margin="0,0,6,0" Padding="8,2" Content="Open" Command="{Binding DataContext.OpenHistoryReportCommand, RelativeSource={RelativeSource AncestorType=DataGrid}}" CommandParameter="{Binding}" />
+                          <Button Padding="8,2" Content="Copy path" Command="{Binding DataContext.CopyHistoryReportPathCommand, RelativeSource={RelativeSource AncestorType=DataGrid}}" CommandParameter="{Binding}" />
+                        </StackPanel>
+                      </DataTemplate>
+                    </DataGridTemplateColumn.CellTemplate>
+                  </DataGridTemplateColumn>
+                </DataGrid.Columns>
+              </DataGrid>
             </DockPanel>
           </TabItem>
         </TabControl>
       </Grid>
 
-      <Border Grid.Row="3" Margin="0,12,0,0" Padding="12" BorderBrush="#D0D0D0" BorderThickness="1" CornerRadius="4">
+      <Border Grid.Row="3"
+              Margin="0,12,0,0"
+              Padding="12,8"
+              Background="{DynamicResource SurfaceBrush}"
+              BorderBrush="{DynamicResource SurfaceBorderBrush}"
+              BorderThickness="1"
+              CornerRadius="8">
+        <DockPanel>
+          <TextBlock DockPanel.Dock="Right"
+                     VerticalAlignment="Center"
+                     FontFamily="{DynamicResource MonoFont}"
+                     FontSize="12"
+                     Foreground="{DynamicResource TextPrimaryBrush}"
+                     Text="{Binding PlanTotalText}" />
+          <StackPanel Margin="0,0,16,0" Orientation="Horizontal" VerticalAlignment="Center">
+            <Ellipse Width="9" Height="9" VerticalAlignment="Center" Fill="{DynamicResource ModeFullBrush}" />
+            <TextBlock Margin="6,0,0,0" VerticalAlignment="Center" Foreground="{DynamicResource TextSecondaryBrush}" Text="Full" />
+            <TextBlock Margin="5,0,18,0" VerticalAlignment="Center" FontWeight="SemiBold" Foreground="{DynamicResource ModeFullBrush}" Text="{Binding PlanFullCount}" />
+            <Ellipse Width="9" Height="9" VerticalAlignment="Center" Fill="{DynamicResource ModeSignaturesBrush}" />
+            <TextBlock Margin="6,0,0,0" VerticalAlignment="Center" Foreground="{DynamicResource TextSecondaryBrush}" Text="Signatures" />
+            <TextBlock Margin="5,0,18,0" VerticalAlignment="Center" FontWeight="SemiBold" Foreground="{DynamicResource ModeSignaturesBrush}" Text="{Binding PlanSignaturesCount}" />
+            <Ellipse Width="9" Height="9" VerticalAlignment="Center" Fill="{DynamicResource ModeListedBrush}" />
+            <TextBlock Margin="6,0,0,0" VerticalAlignment="Center" Foreground="{DynamicResource TextSecondaryBrush}" Text="Listed" />
+            <TextBlock Margin="5,0,18,0" VerticalAlignment="Center" FontWeight="SemiBold" Foreground="{DynamicResource ModeListedBrush}" Text="{Binding PlanListedCount}" />
+            <Ellipse Width="9" Height="9" VerticalAlignment="Center" Fill="{DynamicResource ModeExcludedBrush}" />
+            <TextBlock Margin="6,0,0,0" VerticalAlignment="Center" Foreground="{DynamicResource TextSecondaryBrush}" Text="Excluded" />
+            <TextBlock Margin="5,0,0,0" VerticalAlignment="Center" FontWeight="SemiBold" Foreground="{DynamicResource ModeExcludedBrush}" Text="{Binding PlanExcludedCount}" />
+          </StackPanel>
+          <TextBlock VerticalAlignment="Center"
+                     FontWeight="SemiBold"
+                     Foreground="{DynamicResource WarningBrush}"
+                     Text="Large report warning"
+                     Visibility="{Binding IsPlanLargeReport, Converter={StaticResource BooleanToVisibilityConverter}}" />
+        </DockPanel>
+      </Border>
+
+      <Border Grid.Row="4" Margin="0,12,0,0" Padding="12" Background="{DynamicResource SurfaceBrush}" BorderBrush="{DynamicResource SurfaceBorderBrush}" BorderThickness="1" CornerRadius="8">
         <Grid>
           <Grid.ColumnDefinitions>
             <ColumnDefinition Width="Auto" />
@@ -228,18 +408,17 @@
             <ColumnDefinition Width="Auto" />
             <ColumnDefinition Width="*" />
           </Grid.ColumnDefinitions>
-          <TextBlock VerticalAlignment="Center" FontWeight="SemiBold" Text="Collection mode:" />
-          <ComboBox Grid.Column="1" Margin="12,0" ItemsSource="{Binding CollectionModes}" SelectedItem="{Binding SelectedMode}" />
+          <TextBlock VerticalAlignment="Center" FontWeight="SemiBold" Foreground="{DynamicResource TextPrimaryBrush}" Text="Collection mode:" />
+          <ComboBox Grid.Column="1" Margin="12,0" MinWidth="150" HorizontalAlignment="Left" ItemsSource="{Binding CollectionModes}" SelectedItem="{Binding SelectedMode}" />
           <Button Grid.Column="2" Padding="12,5" Command="{Binding ApplySelectedModeCommand}" Content="Apply" />
           <Button Grid.Column="3" Margin="8,0,0,0" Padding="12,5" Command="{Binding ResetLocalRuleCommand}" Content="Reset local rule" />
           <StackPanel Grid.Column="4" Margin="16,0,0,0" VerticalAlignment="Center">
             <StackPanel Orientation="Horizontal">
-              <TextBlock Foreground="Gray" Text="Folder rules apply recursively. Rules: " />
-              <TextBlock Foreground="Gray" Text="{Binding RuleCount}" />
+              <TextBlock Foreground="{DynamicResource TextSecondaryBrush}" Text="Folder rules apply recursively. Rules: " />
+              <TextBlock Foreground="{DynamicResource TextSecondaryBrush}" Text="{Binding RuleCount}" />
             </StackPanel>
-            <TextBlock Foreground="Gray" Text="{Binding PlanSummary}" TextTrimming="CharacterEllipsis" />
             <StackPanel Orientation="Horizontal">
-              <TextBlock Foreground="Gray" Text="{Binding GenerationStatus}" TextTrimming="CharacterEllipsis" />
+              <TextBlock Foreground="{DynamicResource TextSecondaryBrush}" Text="{Binding GenerationStatus}" TextTrimming="CharacterEllipsis" />
               <Button Margin="12,0,0,0" Padding="8,2" Command="{Binding GenerateReportCancelCommand}" Content="Cancel" />
               <Button Margin="8,0,0,0" Padding="8,2" Command="{Binding OpenOutputCommand}" Content="Open report" />
               <Button Margin="8,0,0,0" Padding="8,2" Command="{Binding OpenOutputsCommand}" Content="Open outputs" />
@@ -249,4 +428,22 @@
       </Border>
     </Grid>
   </DockPanel>
+
+    <!-- Toast notification -->
+    <Border Margin="24"
+            Padding="14,10"
+            HorizontalAlignment="Right"
+            VerticalAlignment="Bottom"
+            Panel.ZIndex="10"
+            Background="{DynamicResource SurfaceBrush}"
+            BorderBrush="{DynamicResource SuccessBrush}"
+            BorderThickness="1"
+            CornerRadius="8"
+            Visibility="{Binding IsToastVisible, Converter={StaticResource BooleanToVisibilityConverter}}">
+      <StackPanel Orientation="Horizontal">
+        <Ellipse Width="9" Height="9" VerticalAlignment="Center" Fill="{DynamicResource SuccessBrush}" />
+        <TextBlock Margin="8,0,0,0" VerticalAlignment="Center" Foreground="{DynamicResource TextPrimaryBrush}" Text="{Binding ToastText}" />
+      </StackPanel>
+    </Border>
+  </Grid>
 </Window>

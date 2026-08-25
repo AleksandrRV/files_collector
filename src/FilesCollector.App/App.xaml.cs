@@ -21,6 +21,7 @@ public partial class App : Application
         {
             _serviceProvider = ConfigureServices();
             ConfigureExceptionHandling(_serviceProvider.GetRequiredService<ILogger<App>>());
+            ThemeManager.Initialize(_serviceProvider.GetRequiredService<IAppPaths>().LocalDataDirectory);
             var mainWindow = _serviceProvider.GetRequiredService<MainWindow>();
             MainWindow = mainWindow;
             mainWindow.Show();

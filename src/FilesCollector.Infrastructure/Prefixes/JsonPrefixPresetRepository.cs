@@ -134,6 +134,11 @@ public sealed class JsonPrefixPresetRepository : IPrefixPresetRepository
             _logger.LogWarning(exception, "The prefix preset file {PrefixPresetPath} could not be read.", path);
             return null;
         }
+        catch (UnauthorizedAccessException exception)
+        {
+            _logger.LogWarning(exception, "Access to the prefix preset file {PrefixPresetPath} was denied.", path);
+            return null;
+        }
     }
 
     private void WriteAtomically(string path, PrefixPreset preset)

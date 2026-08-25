@@ -29,7 +29,18 @@ public sealed class CollectionPlanner
         var items = new List<CollectionPlanItem>(inventory.Files.Count);
         foreach (var file in inventory.Files)
         {
-            items.Add(CreatePlanItem(file, ruleSet, extensionRules, scanOptions));
+            items.Add(BuildItem(
+                file.FullPath,
+                file.RelativePath,
+                file.Extension,
+                file.SizeBytes,
+                file.IsAccessible,
+                file.IsHidden,
+                file.IsSystem,
+                ruleSet,
+                extensionRules,
+                scanOptions,
+                extensionCountsToUpdate: null));
         }
 
         return new CollectionPlan(items.OrderBy(item => item.RelativePath, StringComparer.OrdinalIgnoreCase).ToArray(), inventory.ExtensionCounts);
@@ -94,14 +105,45 @@ public sealed class CollectionPlanner
         }
 
         var extension = GetExtension(entry.Name);
-        extensionCounts[extension] = extensionCounts.TryGetValue(extension, out var count) ? count + 1 : 1;
+        items.Add(BuildItem(
+            entry.FullPath,
+            relativePath,
+            extension,
+            entry.SizeBytes,
+            entry.IsAccessible,
+            entry.IsHidden,
+            entry.IsSystem,
+            ruleSet,
+            extensionRules,
+            scanOptions,
+            extensionCounts));
+    }
+
+    private static CollectionPlanItem BuildItem(
+        string fullPath,
+        string relativePath,
+        string extension,
+        long? sizeBytes,
+        bool isAccessible,
+        bool isHidden,
+        bool isSystem,
+        RuleSet ruleSet,
+        IReadOnlyList<ExtensionRule> extensionRules,
+        ScanOptions scanOptions,
+        Dictionary<string, int>? extensionCountsToUpdate)
+    {
+        if (extensionCountsToUpdate is not null)
+        {
+            extensionCountsToUpdate[extension] = extensionCountsToUpdate.TryGetValue(extension, out var count) ? count + 1 : 1;
+        }
+
         var resolution = ruleSet.Resolve(relativePath, PathRuleKind.File);
         var extensionRule = extensionRules.LastOrDefault(rule => string.Equals(NormalizeExtension(rule.Extension), extension, StringComparison.OrdinalIgnoreCase));
         var explicitFileRule = resolution.Source == RuleSource.Local;
         var mode = resolution.Mode;
         string? reason = null;
 
-        if (!entry.IsAccessible)
+        if (!isAccessible)
         {
             mode = CollectionMode.Listed;
             reason = "file_unavailable";
@@ -116,12 +158,12 @@ public sealed class CollectionPlanner
             mode = CollectionMode.Excluded;
             reason = "not_included_pattern";
         }
-        else if (entry.IsHidden && !scanOptions.IncludeHidden)
+        else if (isHidden && !scanOptions.IncludeHidden)
         {
             mode = CollectionMode.Excluded;
             reason = "hidden_file";
         }
-        else if (entry.IsSystem && !scanOptions.IncludeSystem)
+        else if (isSystem && !scanOptions.IncludeSystem)
         {
             mode = CollectionMode.Excluded;
             reason = "system_file";
@@ -136,7 +178,7 @@ public sealed class CollectionPlanner
             mode = extensionRule.Mode;
         }
 
-        if (mode != CollectionMode.Excluded && entry.SizeBytes is > 0 && entry.SizeBytes > scanOptions.MaxFileSizeBytes)
+        if (mode != CollectionMode.Excluded && sizeBytes is > 0 && sizeBytes > scanOptions.MaxFileSizeBytes)
         {
             mode = CollectionMode.Listed;
             reason = "size_limit";
@@ -147,65 +189,7 @@ public sealed class CollectionPlanner
             reason = "binary_extension";
         }
 
-        items.Add(new CollectionPlanItem(entry.FullPath, relativePath, mode, entry.SizeBytes, reason));
-    }
-
-    private static CollectionPlanItem CreatePlanItem(FileInventoryEntry file, RuleSet ruleSet, IReadOnlyList<ExtensionRule> extensionRules, ScanOptions scanOptions)
-    {
-        var extension = file.Extension;
-        var resolution = ruleSet.Resolve(file.RelativePath, PathRuleKind.File);
-        var extensionRule = extensionRules.LastOrDefault(rule => string.Equals(NormalizeExtension(rule.Extension), extension, StringComparison.OrdinalIgnoreCase));
-        var explicitFileRule = resolution.Source == RuleSource.Local;
-        var mode = resolution.Mode;
-        string? reason = null;
-
-        if (!file.IsAccessible)
-        {
-            mode = CollectionMode.Listed;
-            reason = "file_unavailable";
-        }
-        else if (GlobMatcher.IsMatch(file.RelativePath, scanOptions.ExcludePatterns))
-        {
-            mode = CollectionMode.Excluded;
-            reason = "excluded_pattern";
-        }
-        else if (scanOptions.IncludePatterns.Count > 0 && !GlobMatcher.IsMatch(file.RelativePath, scanOptions.IncludePatterns))
-        {
-            mode = CollectionMode.Excluded;
-            reason = "not_included_pattern";
-        }
-        else if (file.IsHidden && !scanOptions.IncludeHidden)
-        {
-            mode = CollectionMode.Excluded;
-            reason = "hidden_file";
-        }
-        else if (file.IsSystem && !scanOptions.IncludeSystem)
-        {
-            mode = CollectionMode.Excluded;
-            reason = "system_file";
-        }
-        else if (!IsExtensionAllowed(extensionRule, scanOptions) && !explicitFileRule)
-        {
-            mode = CollectionMode.Excluded;
-            reason = "extension_disabled";
-        }
-        else if (resolution.Source == RuleSource.Global && extensionRule is { Enabled: true })
-        {
-            mode = extensionRule.Mode;
-        }
-
-        if (mode != CollectionMode.Excluded && file.SizeBytes is > 0 && file.SizeBytes > scanOptions.MaxFileSizeBytes)
-        {
-            mode = CollectionMode.Listed;
-            reason = "size_limit";
-        }
-        else if (mode != CollectionMode.Excluded && BinaryExtensions.Contains(extension))
-        {
-            mode = scanOptions.BinaryFileMode;
-            reason = "binary_extension";
-        }
-
-        return new CollectionPlanItem(file.FullPath, file.RelativePath, mode, file.SizeBytes, reason);
+        return new CollectionPlanItem(fullPath, relativePath, mode, sizeBytes, reason);
     }
 
     private static bool IsExtensionAllowed(ExtensionRule? extensionRule, ScanOptions scanOptions)

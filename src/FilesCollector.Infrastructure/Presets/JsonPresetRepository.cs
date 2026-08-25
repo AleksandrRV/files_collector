@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using FilesCollector.Core;
@@ -31,7 +32,7 @@ public sealed class JsonPresetRepository : IPresetRepository
         {
             EnsureDefaultPreset();
             var presets = new List<Preset>();
-            foreach (var item in ReadIndex())
+            foreach (var item in ReadIndexItems())
             {
                 var preset = ReadPreset(item.Id);
                 if (preset is not null)
@@ -104,7 +105,19 @@ public sealed class JsonPresetRepository : IPresetRepository
                 .ToList();
 
             WriteJsonAtomically(GetPresetPath(normalized.Id), normalized);
-            var index = ReadIndex();
+            List<PresetIndexItem> index;
+            if (!TryReadIndex(out var readIndex))
+            {
+                // The index is temporarily unreadable; rebuild it from the preset files
+                // instead of overwriting it with a partial list that would hide presets.
+                _logger.LogWarning("The preset index could not be read; rebuilding it from the preset files.");
+                index = RebuildIndex();
+            }
+            else
+            {
+                index = readIndex;
+            }
+
             var existingIndex = index.FindIndex(item => item.Id == normalized.Id);
             var indexItem = new PresetIndexItem(normalized.Id, normalized.Name);
             if (existingIndex >= 0)
@@ -137,7 +150,17 @@ public sealed class JsonPresetRepository : IPresetRepository
             }
 
             File.Delete(presetPath);
-            var index = ReadIndex();
+            List<PresetIndexItem> index;
+            if (!TryReadIndex(out var readIndex))
+            {
+                _logger.LogWarning("The preset index could not be read; rebuilding it from the preset files.");
+                index = RebuildIndex();
+            }
+            else
+            {
+                index = readIndex;
+            }
+
             index.RemoveAll(item => item.Id == id);
             WriteJsonAtomically(GetIndexPath(), index);
             return true;
@@ -160,41 +183,54 @@ public sealed class JsonPresetRepository : IPresetRepository
 
     private List<Preset> LoadPresetsWithoutInitialization()
     {
-        return ReadIndex()
+        return ReadIndexItems()
             .Select(item => ReadPreset(item.Id))
             .Where(preset => preset is not null)
             .Cast<Preset>()
             .ToList();
     }
 
-    private List<PresetIndexItem> ReadIndex()
+    private bool TryReadIndex([NotNullWhen(true)] out List<PresetIndexItem>? index)
     {
+        index = null;
         EnsureStorage();
         var indexPath = GetIndexPath();
         if (!File.Exists(indexPath))
         {
             var rebuiltIndex = RebuildIndex();
             WriteJsonAtomically(indexPath, rebuiltIndex);
-            return rebuiltIndex;
+            index = rebuiltIndex;
+            return true;
         }
 
         try
         {
-            var index = JsonSerializer.Deserialize<List<PresetIndexItem>>(File.ReadAllText(indexPath), _jsonOptions);
-            return index ?? [];
+            index = JsonSerializer.Deserialize<List<PresetIndexItem>>(File.ReadAllText(indexPath), _jsonOptions) ?? [];
+            return true;
         }
         catch (JsonException exception)
         {
             _logger.LogWarning(exception, "The preset index is invalid and will be rebuilt.");
             var rebuiltIndex = RebuildIndex();
             WriteJsonAtomically(indexPath, rebuiltIndex);
-            return rebuiltIndex;
+            index = rebuiltIndex;
+            return true;
         }
         catch (IOException exception)
         {
             _logger.LogWarning(exception, "The preset index could not be read.");
-            return [];
+            return false;
         }
+        catch (UnauthorizedAccessException exception)
+        {
+            _logger.LogWarning(exception, "Access to the preset index was denied.");
+            return false;
+        }
+    }
+
+    private List<PresetIndexItem> ReadIndexItems()
+    {
+        return TryReadIndex(out var index) ? index : [];
     }
 
     private List<PresetIndexItem> RebuildIndex()
@@ -246,6 +282,11 @@ public sealed class JsonPresetRepository : IPresetRepository
         catch (IOException exception)
         {
             _logger.LogWarning(exception, "The preset file {PresetPath} could not be read.", path);
+            return null;
+        }
+        catch (UnauthorizedAccessException exception)
+        {
+            _logger.LogWarning(exception, "Access to the preset file {PresetPath} was denied.", path);
             return null;
         }
     }

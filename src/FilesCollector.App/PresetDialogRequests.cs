@@ -38,3 +38,24 @@ public sealed class UnsavedChangesRequestEventArgs : EventArgs
 
     public UnsavedChangesDecision Decision { get; set; } = UnsavedChangesDecision.Cancel;
 }
+
+public sealed class PresetExportRequestEventArgs : EventArgs
+{
+    public PresetExportRequestEventArgs(string suggestedFileName)
+    {
+        SuggestedFileName = suggestedFileName;
+    }
+
+    public string SuggestedFileName { get; }
+
+    public string? FilePath { get; set; }
+
+    public bool IsAccepted { get; set; }
+}
+
+public sealed class PresetImportRequestEventArgs : EventArgs
+{
+    public string? FilePath { get; set; }
+
+    public bool IsAccepted { get; set; }
+}

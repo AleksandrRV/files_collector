@@ -8,6 +8,7 @@ using FilesCollector.Core.Planning;
 using FilesCollector.Core.Reporting;
 using FilesCollector.Core.Rules;
 using FilesCollector.Core.Settings;
+using Microsoft.Extensions.Logging;
 
 namespace FilesCollector.App;
 
@@ -21,6 +22,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
     private readonly IReportWriter _reportWriter;
     private readonly IPresetRepository _presetRepository;
     private readonly IAppSessionStore _appSessionStore;
+    private readonly ILogger<MainWindowViewModel> _logger;
     private readonly RuleSet _ruleSet = new();
     private Preset _activePreset = null!;
     private PresetState _savedPresetState = null!;
@@ -47,9 +49,11 @@ public sealed partial class MainWindowViewModel : ObservableObject
         IReportWriter reportWriter,
         IPresetRepository presetRepository,
         IAppSessionStore appSessionStore,
-        PrefixPresetsViewModel prefixPresets)
+        PrefixPresetsViewModel prefixPresets,
+        ILogger<MainWindowViewModel> logger)
     {
         _uiContext = SynchronizationContext.Current ?? new SynchronizationContext();
+        _logger = logger;
         _appPaths = appPaths;
         _scanRootProvider = scanRootProvider;
         _fileSystem = fileSystem;
@@ -71,6 +75,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
             ? _activePreset.ScanRootPath
             : _scanRootProvider.GetDefaultRoot();
         SetRoot(startupRoot);
+        LoadReportHistory();
         ResetPresetDirtyState();
     }
 
@@ -135,6 +140,36 @@ public sealed partial class MainWindowViewModel : ObservableObject
 
     [ObservableProperty]
     private string planSummary = "Plan not calculated.";
+
+    [ObservableProperty]
+    private int planFullCount;
+
+    [ObservableProperty]
+    private int planSignaturesCount;
+
+    [ObservableProperty]
+    private int planListedCount;
+
+    [ObservableProperty]
+    private int planExcludedCount;
+
+    [ObservableProperty]
+    private string planTotalText = string.Empty;
+
+    [ObservableProperty]
+    private bool isPlanLargeReport;
+
+    [ObservableProperty]
+    private string excludedByPatternsText = string.Empty;
+
+    [ObservableProperty]
+    private string notIncludedByPatternsText = string.Empty;
+
+    [ObservableProperty]
+    private bool isToastVisible;
+
+    [ObservableProperty]
+    private string toastText = string.Empty;
 
     [ObservableProperty]
     [NotifyCanExecuteChangedFor(nameof(RefreshInventoryCommand))]
@@ -261,10 +296,17 @@ public sealed partial class MainWindowViewModel : ObservableObject
         catch (IOException exception)
         {
             InventoryStatus = $"Inventory refresh failed: {exception.Message}";
+            _logger.LogWarning(exception, "Inventory refresh failed for {RootPath}.", rootPath);
         }
         catch (UnauthorizedAccessException exception)
         {
             InventoryStatus = $"Inventory refresh failed: {exception.Message}";
+            _logger.LogWarning(exception, "Inventory refresh was denied access for {RootPath}.", rootPath);
+        }
+        catch (Exception exception)
+        {
+            InventoryStatus = $"Inventory refresh failed unexpectedly: {exception.Message}";
+            _logger.LogError(exception, "Unexpected inventory refresh failure for {RootPath}.", rootPath);
         }
         finally
         {
@@ -302,6 +344,8 @@ public sealed partial class MainWindowViewModel : ObservableObject
             var result = await Task.Run(() => _reportWriter.Write(request, progress, cancellationToken), cancellationToken);
             LastOutputPath = result.ReportPath;
             GenerationStatus = $"Report created: {Path.GetFileName(result.ReportPath)}";
+            LoadReportHistory();
+            ShowToast($"Report created: {Path.GetFileName(result.ReportPath)}");
         }
         catch (OperationCanceledException)
         {
@@ -310,10 +354,17 @@ public sealed partial class MainWindowViewModel : ObservableObject
         catch (IOException exception)
         {
             GenerationStatus = $"Report generation failed: {exception.Message}";
+            _logger.LogWarning(exception, "Report generation failed for preset {PresetName}.", ActivePresetName);
         }
         catch (UnauthorizedAccessException exception)
         {
             GenerationStatus = $"Report generation failed: {exception.Message}";
+            _logger.LogWarning(exception, "Report generation was denied access for preset {PresetName}.", ActivePresetName);
+        }
+        catch (Exception exception)
+        {
+            GenerationStatus = $"Report generation failed unexpectedly: {exception.Message}";
+            _logger.LogError(exception, "Unexpected report generation failure for preset {PresetName}.", ActivePresetName);
         }
         finally
         {
@@ -369,6 +420,11 @@ public sealed partial class MainWindowViewModel : ObservableObject
     [RelayCommand]
     private void NewPreset()
     {
+        if (!ConfirmLeavingActivePreset())
+        {
+            return;
+        }
+
         var name = RequestPresetName("New preset", "Preset name:", string.Empty);
         if (name is null)
         {
@@ -480,6 +536,167 @@ public sealed partial class MainWindowViewModel : ObservableObject
         StatusText = "Unsaved preset changes discarded.";
     }
 
+    [RelayCommand]
+    private void ExportPreset()
+    {
+        var suggestedFileName = $"{SanitizeFileName(ActivePresetName)}.preset.json";
+        var request = new PresetExportRequestEventArgs(suggestedFileName);
+        PresetExportRequested?.Invoke(this, request);
+        if (!request.IsAccepted || string.IsNullOrWhiteSpace(request.FilePath))
+        {
+            return;
+        }
+
+        try
+        {
+            File.WriteAllText(request.FilePath, PresetExportData.FromPreset(_activePreset).Serialize(), new System.Text.UTF8Encoding(false));
+            StatusText = $"Preset exported: {request.FilePath}";
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            StatusText = $"Preset export failed: {exception.Message}";
+            _logger.LogWarning(exception, "Preset export failed for {FilePath}.", request.FilePath);
+        }
+    }
+
+    [RelayCommand]
+    private void ImportPreset()
+    {
+        var request = new PresetImportRequestEventArgs();
+        PresetImportRequested?.Invoke(this, request);
+        if (!request.IsAccepted || string.IsNullOrWhiteSpace(request.FilePath))
+        {
+            return;
+        }
+
+        try
+        {
+            var data = PresetExportData.Deserialize(File.ReadAllText(request.FilePath));
+            var preset = data.ToPreset(CreateUniqueImportedName(data.Name), ScanRoot);
+
+            if (!ConfirmLeavingActivePreset())
+            {
+                return;
+            }
+
+            _presetRepository.Save(preset);
+            LoadPresetList();
+            ActivatePreset(_presetRepository.Get(preset.Id) ?? preset);
+            RefreshRulePresentation();
+            ResetPresetDirtyState();
+            StatusText = $"Preset imported: {preset.Name}";
+        }
+        catch (InvalidDataException exception)
+        {
+            StatusText = exception.Message;
+        }
+        catch (ArgumentException exception)
+        {
+            StatusText = exception.Message;
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            StatusText = $"Preset import failed: {exception.Message}";
+            _logger.LogWarning(exception, "Preset import failed for {FilePath}.", request.FilePath);
+        }
+    }
+
+    private string CreateUniqueImportedName(string baseName)
+    {
+        var trimmed = string.IsNullOrWhiteSpace(baseName) ? "Imported preset" : baseName.Trim();
+        if (ValidatePresetName(trimmed, null) is null)
+        {
+            return trimmed;
+        }
+
+        for (var index = 2; ; index++)
+        {
+            var candidate = $"{trimmed} ({index})";
+            if (ValidatePresetName(candidate, null) is null)
+            {
+                return candidate;
+            }
+        }
+    }
+
+    private static string SanitizeFileName(string value)
+    {
+        var invalidCharacters = Path.GetInvalidFileNameChars();
+        var sanitized = new string(value.Select(character => invalidCharacters.Contains(character) ? '_' : character).ToArray()).Trim();
+        return string.IsNullOrWhiteSpace(sanitized) ? "preset" : sanitized;
+    }
+
+    public ObservableCollection<ReportHistoryItem> ReportHistory { get; } = [];
+
+    private Timer? _toastTimer;
+
+    [RelayCommand]
+    private void RefreshReportHistory()
+    {
+        LoadReportHistory();
+    }
+
+    [RelayCommand]
+    private void OpenHistoryReport(ReportHistoryItem? item)
+    {
+        if (item is not null)
+        {
+            OutputOpenRequested?.Invoke(this, item.FilePath);
+        }
+    }
+
+    [RelayCommand]
+    private void CopyHistoryReportPath(ReportHistoryItem? item)
+    {
+        if (item is null)
+        {
+            return;
+        }
+
+        try
+        {
+            System.Windows.Clipboard.SetText(item.FilePath);
+            StatusText = $"Path copied: {item.FilePath}";
+        }
+        catch (Exception exception)
+        {
+            StatusText = $"Could not copy the path: {exception.Message}";
+        }
+    }
+
+    private void LoadReportHistory()
+    {
+        ReportHistory.Clear();
+        try
+        {
+            Directory.CreateDirectory(_appPaths.OutputsDirectory);
+            foreach (var path in Directory.EnumerateFiles(_appPaths.OutputsDirectory, "*.md")
+                         .OrderByDescending(File.GetLastWriteTime))
+            {
+                var info = new FileInfo(path);
+                ReportHistory.Add(new ReportHistoryItem(
+                    path,
+                    Path.GetFileNameWithoutExtension(path),
+                    $"{info.LastWriteTime:yyyy-MM-dd HH:mm} | {FormatSize(info.Length)}"));
+            }
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            _logger.LogWarning(exception, "The outputs directory could not be enumerated.");
+        }
+    }
+
+    private void ShowToast(string message)
+    {
+        _toastTimer?.Dispose();
+        ToastText = message;
+        IsToastVisible = true;
+        _toastTimer = new Timer(_ =>
+        {
+            _uiContext.Post(_ => IsToastVisible = false, null);
+        }, null, TimeSpan.FromSeconds(6), Timeout.InfiniteTimeSpan);
+    }
+
     public event EventHandler? AboutRequested;
 
     public event EventHandler? RootChangeRequested;
@@ -492,6 +709,10 @@ public sealed partial class MainWindowViewModel : ObservableObject
 
     public event EventHandler<string>? OutputOpenRequested;
 
+    public event EventHandler<PresetExportRequestEventArgs>? PresetExportRequested;
+
+    public event EventHandler<PresetImportRequestEventArgs>? PresetImportRequested;
+
     public void Shutdown()
     {
         _inventoryRefreshCancellation?.Cancel();
@@ -501,6 +722,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
         _filterDebounceTimer?.Dispose();
         _inventoryWatcher?.Dispose();
         _watcherDebounceTimer?.Dispose();
+        _toastTimer?.Dispose();
     }
 
     public void SetRoot(string rootPath)
@@ -591,6 +813,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
 
         var node = SelectedNode!;
         _ruleSet.SetRule(node.RelativePath, GetRuleKind(node), mode);
+        var resetRulesCount = node.IsDirectory ? _ruleSet.RemoveDescendantRules(node.RelativePath) : 0;
         SelectedMode = mode;
         RefreshRulePresentation();
         OnPropertyChanged(nameof(RuleCount));
@@ -696,23 +919,29 @@ public sealed partial class MainWindowViewModel : ObservableObject
         return !IsDefaultPreset;
     }
 
+    private bool ConfirmLeavingActivePreset()
+    {
+        if (!IsPresetDirty)
+        {
+            return true;
+        }
+
+        var request = new UnsavedChangesRequestEventArgs(ActivePresetName);
+        UnsavedChangesRequested?.Invoke(this, request);
+        if (request.Decision == UnsavedChangesDecision.Save && !SaveCurrentPreset())
+        {
+            return false;
+        }
+
+        return request.Decision != UnsavedChangesDecision.Cancel;
+    }
+
     private void TrySwitchPreset(Guid id)
     {
-        if (IsPresetDirty)
+        if (!ConfirmLeavingActivePreset())
         {
-            var request = new UnsavedChangesRequestEventArgs(ActivePresetName);
-            UnsavedChangesRequested?.Invoke(this, request);
-            if (request.Decision == UnsavedChangesDecision.Save && !SaveCurrentPreset())
-            {
-                RestorePresetSelection();
-                return;
-            }
-
-            if (request.Decision == UnsavedChangesDecision.Cancel)
-            {
-                RestorePresetSelection();
-                return;
-            }
+            RestorePresetSelection();
+            return;
         }
 
         var preset = _presetRepository.Get(id);
@@ -739,10 +968,17 @@ public sealed partial class MainWindowViewModel : ObservableObject
         {
             var preset = CreateCurrentPreset(_activePreset.Id, _activePreset.Name, _activePreset.CreatedAt, _activePreset.UpdatedAt);
             _presetRepository.Save(preset);
-            _suppressPresetSelection = true;
-            LoadPresetList();
-            ActivatePreset(_presetRepository.Get(preset.Id) ?? preset);
-            _suppressPresetSelection = false;
+            try
+            {
+                _suppressPresetSelection = true;
+                LoadPresetList();
+                ActivatePreset(_presetRepository.Get(preset.Id) ?? preset);
+            }
+            finally
+            {
+                _suppressPresetSelection = false;
+            }
+
             OnPropertyChanged(nameof(SelectedPresetId));
             StatusText = $"Preset saved: {preset.Name}";
             return true;
@@ -769,8 +1005,15 @@ public sealed partial class MainWindowViewModel : ObservableObject
         _activePreset = preset;
         _ruleSet.LoadRules(preset.PathRules);
         _suppressPrefixPresetState = true;
-        PrefixPresets.Select(preset.PrefixPresetId);
-        _suppressPrefixPresetState = false;
+        try
+        {
+            PrefixPresets.Select(preset.PrefixPresetId);
+        }
+        finally
+        {
+            _suppressPrefixPresetState = false;
+        }
+
         LoadFilterSettings();
         _savedPresetState = CreatePresetState();
         ActivePresetName = preset.Name;
@@ -778,9 +1021,15 @@ public sealed partial class MainWindowViewModel : ObservableObject
         IsPresetDirty = false;
         var wasSuppressingPresetSelection = _suppressPresetSelection;
         _suppressPresetSelection = true;
-        SelectedPresetId = preset.Id;
-        OnPropertyChanged(nameof(SelectedPresetId));
-        _suppressPresetSelection = wasSuppressingPresetSelection;
+        try
+        {
+            SelectedPresetId = preset.Id;
+            OnPropertyChanged(nameof(SelectedPresetId));
+        }
+        finally
+        {
+            _suppressPresetSelection = wasSuppressingPresetSelection;
+        }
         OnPropertyChanged(nameof(RuleCount));
         ResetLocalRuleCommand.NotifyCanExecuteChanged();
         _appSessionStore.SetLastPresetId(preset.Id);
@@ -825,8 +1074,14 @@ public sealed partial class MainWindowViewModel : ObservableObject
     private void RestorePresetSelection()
     {
         _suppressPresetSelection = true;
-        SelectedPresetId = _activePreset.Id;
-        _suppressPresetSelection = false;
+        try
+        {
+            SelectedPresetId = _activePreset.Id;
+        }
+        finally
+        {
+            _suppressPresetSelection = false;
+        }
     }
 
     private void UpdateDirtyState()
@@ -901,18 +1156,24 @@ public sealed partial class MainWindowViewModel : ObservableObject
     private void LoadFilterSettings()
     {
         _suppressFilterChanges = true;
-        IncludeAllExtensions = _activePreset.ScanOptions.IncludeAllExtensions;
-        IncludeHidden = _activePreset.ScanOptions.IncludeHidden;
-        IncludeSystem = _activePreset.ScanOptions.IncludeSystem;
-        FollowReparsePoints = _activePreset.ScanOptions.FollowReparsePoints;
-        MaxFileSizeKiB = Math.Max(1, (int)Math.Min(int.MaxValue, _activePreset.ScanOptions.MaxFileSizeBytes / 1024));
-        BinaryFileMode = _activePreset.ScanOptions.BinaryFileMode;
-        RedactRootPath = _activePreset.ScanOptions.RedactRootPath;
-        IncludeFileMetadataBlocks = _activePreset.ScanOptions.IncludeFileMetadataBlocks;
-        InventoryRefreshMinutes = _activePreset.ScanOptions.InventoryRefreshMinutes;
-        IncludePatternsText = string.Join(Environment.NewLine, _activePreset.ScanOptions.IncludePatterns);
-        ExcludePatternsText = string.Join(Environment.NewLine, _activePreset.ScanOptions.ExcludePatterns);
-        _suppressFilterChanges = false;
+        try
+        {
+            IncludeAllExtensions = _activePreset.ScanOptions.IncludeAllExtensions;
+            IncludeHidden = _activePreset.ScanOptions.IncludeHidden;
+            IncludeSystem = _activePreset.ScanOptions.IncludeSystem;
+            FollowReparsePoints = _activePreset.ScanOptions.FollowReparsePoints;
+            MaxFileSizeKiB = Math.Max(1, (int)Math.Min(int.MaxValue, _activePreset.ScanOptions.MaxFileSizeBytes / 1024));
+            BinaryFileMode = _activePreset.ScanOptions.BinaryFileMode;
+            RedactRootPath = _activePreset.ScanOptions.RedactRootPath;
+            IncludeFileMetadataBlocks = _activePreset.ScanOptions.IncludeFileMetadataBlocks;
+            InventoryRefreshMinutes = _activePreset.ScanOptions.InventoryRefreshMinutes;
+            IncludePatternsText = string.Join(Environment.NewLine, _activePreset.ScanOptions.IncludePatterns);
+            ExcludePatternsText = string.Join(Environment.NewLine, _activePreset.ScanOptions.ExcludePatterns);
+        }
+        finally
+        {
+            _suppressFilterChanges = false;
+        }
     }
 
     private void UpdatePlan()
@@ -920,11 +1181,31 @@ public sealed partial class MainWindowViewModel : ObservableObject
         if (_inventorySnapshot is null)
         {
             PlanSummary = "Plan is unavailable until the inventory is loaded.";
+            PlanFullCount = 0;
+            PlanSignaturesCount = 0;
+            PlanListedCount = 0;
+            PlanExcludedCount = 0;
+            PlanTotalText = string.Empty;
+            IsPlanLargeReport = false;
+            ExcludedByPatternsText = string.Empty;
+            NotIncludedByPatternsText = string.Empty;
             return;
         }
 
         var plan = _collectionPlanner.CreatePlan(_inventorySnapshot, _ruleSet, _activePreset.ExtensionRules, _activePreset.ScanOptions);
         _currentPlan = plan;
+        PlanFullCount = plan.FullCount;
+        PlanSignaturesCount = plan.SignaturesCount;
+        PlanListedCount = plan.ListedCount;
+        PlanExcludedCount = plan.ExcludedCount;
+        IsPlanLargeReport = plan.EstimatedBytes > 25L * 1024 * 1024;
+        var collectedFiles = plan.FullCount + plan.SignaturesCount + plan.ListedCount;
+        var tokenEstimate = Math.Max(1, plan.EstimatedBytes / 4);
+        PlanTotalText = $"Report ~= {FormatSize(plan.EstimatedBytes)} | {collectedFiles} file(s) | ~{(tokenEstimate + 999) / 1000}K tokens";
+        var excludedByPatterns = plan.Items.Count(item => item.Reason == "excluded_pattern");
+        ExcludedByPatternsText = excludedByPatterns > 0 ? $"Excluded by patterns: {excludedByPatterns} file(s)" : string.Empty;
+        var notIncludedByPatterns = plan.Items.Count(item => item.Reason == "not_included_pattern");
+        NotIncludedByPatternsText = notIncludedByPatterns > 0 ? $"Not included by include patterns: {notIncludedByPatterns} file(s)" : string.Empty;
         GenerateReportCommand.NotifyCanExecuteChanged();
         LoadExtensionRuleItems(plan.ExtensionCounts);
         var warning = plan.EstimatedBytes > 25L * 1024 * 1024 ? " · Large report warning" : string.Empty;
@@ -955,7 +1236,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
         lines.Add("## Report metadata");
         lines.Add($"preset: {ActivePresetName}");
         lines.Add($"prefix_preset: {PrefixPresets.SelectedName}");
-        lines.Add($"root: {ScanRoot}");
+        lines.Add($"root: {(_activePreset.ScanOptions.RedactRootPath ? "<redacted>" : ScanRoot)}");
         lines.Add(string.Empty);
         lines.Add("## File index");
         if (_currentPlan is null)
@@ -981,25 +1262,30 @@ public sealed partial class MainWindowViewModel : ObservableObject
     private void LoadExtensionRuleItems(IReadOnlyDictionary<string, int> extensionCounts)
     {
         _suppressFilterChanges = true;
-        foreach (var item in ExtensionRuleItems)
+        try
         {
-            item.Changed -= OnExtensionRuleChanged;
-        }
+            foreach (var item in ExtensionRuleItems)
+            {
+                item.Changed -= OnExtensionRuleChanged;
+            }
 
-        ExtensionRuleItems.Clear();
-        var extensions = extensionCounts.Keys
-            .Concat(_activePreset.ExtensionRules.Select(rule => rule.Extension))
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .OrderBy(extension => extension, StringComparer.OrdinalIgnoreCase);
-        foreach (var extension in extensions)
+            ExtensionRuleItems.Clear();
+            var extensions = extensionCounts.Keys
+                .Concat(_activePreset.ExtensionRules.Select(rule => rule.Extension))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .OrderBy(extension => extension, StringComparer.OrdinalIgnoreCase);
+            foreach (var extension in extensions)
+            {
+                var rule = _activePreset.ExtensionRules.LastOrDefault(item => string.Equals(item.Extension, extension, StringComparison.OrdinalIgnoreCase));
+                var item = new ExtensionRuleItem(extension, extensionCounts.GetValueOrDefault(extension), rule?.Enabled ?? IncludeAllExtensions, rule?.Mode ?? CollectionMode.Full);
+                item.Changed += OnExtensionRuleChanged;
+                ExtensionRuleItems.Add(item);
+            }
+        }
+        finally
         {
-            var rule = _activePreset.ExtensionRules.LastOrDefault(item => string.Equals(item.Extension, extension, StringComparison.OrdinalIgnoreCase));
-            var item = new ExtensionRuleItem(extension, extensionCounts.GetValueOrDefault(extension), rule?.Enabled ?? IncludeAllExtensions, rule?.Mode ?? CollectionMode.Full);
-            item.Changed += OnExtensionRuleChanged;
-            ExtensionRuleItems.Add(item);
+            _suppressFilterChanges = false;
         }
-
-        _suppressFilterChanges = false;
     }
 
     private void OnExtensionRuleChanged(object? sender, EventArgs e)
@@ -1169,6 +1455,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
             watcher.Created += OnInventoryWatcherChanged;
             watcher.Deleted += OnInventoryWatcherChanged;
             watcher.Renamed += OnInventoryWatcherRenamed;
+            watcher.Error += OnInventoryWatcherError;
             _inventoryWatcher = watcher;
         }
         catch (IOException)
@@ -1195,6 +1482,12 @@ public sealed partial class MainWindowViewModel : ObservableObject
         {
             ScheduleWatcherRefresh();
         }
+    }
+
+    private void OnInventoryWatcherError(object sender, ErrorEventArgs e)
+    {
+        _logger.LogWarning(e.GetException(), "The inventory file system watcher raised an error. A refresh will be scheduled.");
+        ScheduleWatcherRefresh();
     }
 
     private void ScheduleWatcherRefresh()

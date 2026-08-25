@@ -17,7 +17,14 @@ public sealed class FileLoggerProvider : ILoggerProvider
                      .OrderByDescending(path => File.GetLastWriteTimeUtc(path))
                      .Skip(14))
         {
-            File.Delete(expiredPath);
+            try
+            {
+                File.Delete(expiredPath);
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+            {
+                // A log held open by another running instance must not prevent startup.
+            }
         }
 
         var fileName = $"files-collector-{startedAt:yyyy-MM-dd}.log";

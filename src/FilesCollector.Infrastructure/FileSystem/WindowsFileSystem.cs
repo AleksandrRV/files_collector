@@ -59,12 +59,30 @@ public sealed class WindowsFileSystem : IFileSystem
         }
         catch (UnauthorizedAccessException exception)
         {
-            return new FileSystemEntry(entryPath, Path.GetFileName(entryPath), EntryKind.Directory, false, false, false, null, false, exception.Message);
+            return CreateInaccessibleEntry(entryPath, exception);
         }
         catch (IOException exception)
         {
-            return new FileSystemEntry(entryPath, Path.GetFileName(entryPath), EntryKind.File, false, false, false, null, false, exception.Message);
+            return CreateInaccessibleEntry(entryPath, exception);
         }
+    }
+
+    private static FileSystemEntry CreateInaccessibleEntry(string entryPath, Exception exception)
+    {
+        // The kind cannot be determined reliably for an inaccessible entry; probe the
+        // file system without throwing and fall back to File so consumers never attempt
+        // directory traversal on an entry that may be a plain file.
+        var kind = Directory.Exists(entryPath) ? EntryKind.Directory : EntryKind.File;
+        return new FileSystemEntry(
+            entryPath,
+            Path.GetFileName(entryPath),
+            kind,
+            false,
+            false,
+            false,
+            null,
+            false,
+            exception.Message);
     }
 
     private static IReadOnlyList<FileSystemEntry> SortEntries(IEnumerable<FileSystemEntry> entries)

@@ -25,7 +25,10 @@ public partial class MainWindow : Window
         _viewModel.PrefixPresets.NameRequested += OnPresetNameRequested;
         _viewModel.PrefixPresets.UnsavedChangesRequested += OnUnsavedChangesRequested;
         _viewModel.PrefixPresets.DeleteRequested += OnDeletePrefixPresetRequested;
+        _viewModel.PrefixPresets.ErrorOccurred += OnPrefixOperationFailed;
         _viewModel.OutputOpenRequested += OnOutputOpenRequested;
+        _viewModel.PresetExportRequested += OnPresetExportRequested;
+        _viewModel.PresetImportRequested += OnPresetImportRequested;
         _subscriptionsAttached = true;
         DataContext = _viewModel;
     }
@@ -42,7 +45,10 @@ public partial class MainWindow : Window
             _viewModel.PrefixPresets.NameRequested -= OnPresetNameRequested;
             _viewModel.PrefixPresets.UnsavedChangesRequested -= OnUnsavedChangesRequested;
             _viewModel.PrefixPresets.DeleteRequested -= OnDeletePrefixPresetRequested;
+            _viewModel.PrefixPresets.ErrorOccurred -= OnPrefixOperationFailed;
             _viewModel.OutputOpenRequested -= OnOutputOpenRequested;
+            _viewModel.PresetExportRequested -= OnPresetExportRequested;
+            _viewModel.PresetImportRequested -= OnPresetImportRequested;
             _viewModel.Shutdown();
             _subscriptionsAttached = false;
         }
@@ -126,12 +132,61 @@ public partial class MainWindow : Window
             : UnsavedChangesDecision.Cancel;
     }
 
+    private void OnPrefixOperationFailed(object? sender, string message)
+    {
+        System.Windows.MessageBox.Show(
+            message,
+            "Files Collector",
+            MessageBoxButton.OK,
+            MessageBoxImage.Warning);
+    }
+
     private void OnOutputOpenRequested(object? sender, string outputPath)
     {
         Process.Start(new ProcessStartInfo(outputPath)
         {
             UseShellExecute = true
         });
+    }
+
+    private void OnToggleThemeClick(object sender, RoutedEventArgs e)
+    {
+        ThemeManager.Toggle();
+        ThemeToggleButton.ToolTip = ThemeManager.IsDark
+            ? "Switch to light theme"
+            : "Switch to dark theme";
+    }
+
+    private void OnPresetExportRequested(object? sender, PresetExportRequestEventArgs e)
+    {
+        var dialog = new SaveFileDialog
+        {
+            Title = "Export preset",
+            Filter = "JSON preset (*.json)|*.json|All files (*.*)|*.*",
+            FileName = e.SuggestedFileName
+        };
+
+        if (dialog.ShowDialog(this) == true)
+        {
+            e.FilePath = dialog.FileName;
+            e.IsAccepted = true;
+        }
+    }
+
+    private void OnPresetImportRequested(object? sender, PresetImportRequestEventArgs e)
+    {
+        var dialog = new OpenFileDialog
+        {
+            Title = "Import preset",
+            Filter = "JSON preset (*.json)|*.json|All files (*.*)|*.*",
+            CheckFileExists = true
+        };
+
+        if (dialog.ShowDialog(this) == true)
+        {
+            e.FilePath = dialog.FileName;
+            e.IsAccepted = true;
+        }
     }
 
     private void OnWindowPreviewKeyDown(object sender, System.Windows.Input.KeyEventArgs e)

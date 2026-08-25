@@ -532,3 +532,152 @@ dotnet list .\src\FilesCollector.sln package --include-transitive
 | Microsoft.NET.Test.Sdk | 17.11.1 |
 
 Перед публикацией лицензии необходимо проверить по фактическому транзитивному dependency graph.
+---
+
+## 20. CI/CD (GitHub Actions)
+
+Файл workflow не хранится в репозитории. Канонический пример находится ниже.
+Для включения CI создайте файл вручную:
+
+1. В **корне репозитория** создайте каталог `.github/workflows/`
+   (именно в корне, не в `src/` — иначе GitHub его не увидит).
+2. Сохраните туда файл `ci.yml` со следующим содержимым:
+
+```yaml
+name: Build
+
+on:
+  push:
+  pull_request:
+
+defaults:
+  run:
+    working-directory: src
+
+jobs:
+  test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+      - name: Restore
+        run: dotnet restore FilesCollector.sln
+      - name: Build
+        run: dotnet build FilesCollector.sln --configuration Release --no-restore
+      - name: Test
+        run: dotnet test FilesCollector.sln --configuration Release --no-build
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: test
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+      - name: Create release package
+        shell: pwsh
+        working-directory: src
+        run: ./scripts/publish-release-win-x64.ps1 -Version ${{ github.ref_name }}
+      - name: Upload release package
+        uses: actions/upload-artifact@v4
+        with:
+          name: FilesCollector-win-x64
+          path: src/.artifacts/release/*.zip*
+```
+
+Примечания:
+
+- `working-directory: src` обязателен: решение лежит в `src/`, а GitHub по умолчанию выполняет команды от корня воркспейса.
+- Для шага `upload-artifact` путь указывается от корня воркспейса (`src/.artifacts/...`), т.к. `defaults.run.working-directory` на шаги `uses` не действует.
+- Job `release` запускается только на тегах вида `v*`.
+
+---
+
+## 21. Каскадный сброс правил и экспорт/импорт пресета
+
+### 21.1. Каскадный сброс при изменении режима папки
+
+При применении эффективного режима к **папке** (`Full`, `Signatures`, `Listed`, `Excluded`
+через контекстное меню или панель «Collection mode») все локальные правила внутренних
+файлов и подпапок **удаляются**: каждый внутренний элемент сбрасывает свой режим и
+возвращается к наследуемому значению, то есть наследует новый режим папки.
+
+- Правило самой папки сохраняется.
+- Правила вне этой папки не затрагиваются.
+- Статусная строка показывает количество сброшенных внутренних правил.
+- Операция «Reset local rule» работает как раньше: возвращает только саму папку
+  к наследуемому режиму и не трогает потомков.
+
+Реализация: `RuleSet.RemoveDescendantRules(relativePath)`.
+
+### 21.2. Экспорт и импорт пресета (кнопки `Export...` / `Import...`)
+
+Пресет сохраняется в JSON-файл, рассчитанный на ручное редактирование: отступы,
+строковые значения перечислений, размер в КиБ, без служебных полей
+(`Id`, даты, путь сканирования). Импорт всегда создаёт **новый** пресет;
+если имя занято, к нему автоматически добавляется суффикс `(2)`, `(3)`, ...
+
+Пример экспортированного файла:
+
+```json
+{
+  "$schema": "files-collector-preset-v1",
+  "name": "Backend review",
+  "defaultMode": "Signatures",
+  "scan": {
+    "includeAllExtensions": false,
+    "includeHidden": true,
+    "includeSystem": false,
+    "followReparsePoints": false,
+    "maxFileSizeKiB": 5120,
+    "binaryFileMode": "Listed",
+    "includePatterns": [],
+    "excludePatterns": [
+      "**/node_modules/**"
+    ],
+    "redactRootPath": false,
+    "includeFileMetadataBlocks": true,
+    "inventoryRefreshMinutes": 1
+  },
+  "extensions": [
+    {
+      "extension": ".png",
+      "enabled": true,
+      "mode": "Listed"
+    }
+  ],
+  "paths": [
+    {
+      "path": "app/node_modules",
+      "type": "Directory",
+      "mode": "Excluded"
+    },
+    {
+      "path": "src/App.cs",
+      "type": "File",
+      "mode": "Full"
+    }
+  ]
+}
+```
+
+Правила ручного редактирования:
+
+1. Тег `$schema` обязателен; допустимое значение — `files-collector-preset-v1`.
+2. Режимы (`defaultMode`, `mode`, `binaryFileMode`) и типы (`type`: `Directory`,
+   `File`) записываются строками с заглавной буквы, как в перечислениях:
+   `Full`, `Signatures`, `Listed`, `Excluded`.
+3. Размер задаётся в КиБ (`maxFileSizeKiB`); во внутреннем представлении он умножается на 1024.
+   Путь в правиле — относительный, разделитель `/`.
+4. Неизвестные поля игнорируются; регистр имён полей не важен (кроме тега `$schema`,
+   который проверяется без учёта регистра по значению).
+
+Импорт: файл читается, проверяется `$schema` и корректность JSON; создаётся новый пресет
+с текущим Scan Root и активируется. При наличии несохранённых изменений активного пресета
+приложение сначала спросит, что с ними сделать.
+
+

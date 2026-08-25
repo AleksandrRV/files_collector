@@ -2,19 +2,22 @@ using System.Collections.ObjectModel;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using FilesCollector.Core.Prefixes;
+using Microsoft.Extensions.Logging;
 
 namespace FilesCollector.App;
 
 public sealed partial class PrefixPresetsViewModel : ObservableObject
 {
     private readonly IPrefixPresetRepository _repository;
+    private readonly ILogger<PrefixPresetsViewModel>? _logger;
     private PrefixPreset? _activePreset;
     private string _savedContent = string.Empty;
     private bool _suppressSelection;
 
-    public PrefixPresetsViewModel(IPrefixPresetRepository repository)
+    public PrefixPresetsViewModel(IPrefixPresetRepository repository, ILogger<PrefixPresetsViewModel>? logger = null)
     {
         _repository = repository;
+        _logger = logger;
         LoadItems();
     }
 
@@ -40,6 +43,9 @@ public sealed partial class PrefixPresetsViewModel : ObservableObject
     public event EventHandler<UnsavedChangesRequestEventArgs>? DeleteRequested;
 
     public event EventHandler? StateChanged;
+
+    /// <summary>Raised when a prefix preset operation fails; the message is user-facing.</summary>
+    public event EventHandler<string>? ErrorOccurred;
 
     [RelayCommand]
     private void ClearSelection()
@@ -92,7 +98,11 @@ public sealed partial class PrefixPresetsViewModel : ObservableObject
             CreatedAt = now,
             UpdatedAt = now
         };
-        _repository.Save(preset);
+        if (!ExecuteSave(() => _repository.Save(preset)))
+        {
+            return;
+        }
+
         LoadItems();
         Activate(_repository.Get(preset.Id) ?? preset);
     }
@@ -102,7 +112,6 @@ public sealed partial class PrefixPresetsViewModel : ObservableObject
     {
         SaveCurrent();
     }
-
     [RelayCommand]
     private void SaveAs()
     {
@@ -127,7 +136,11 @@ public sealed partial class PrefixPresetsViewModel : ObservableObject
             CreatedAt = now,
             UpdatedAt = now
         };
-        _repository.Save(preset);
+        if (!ExecuteSave(() => _repository.Save(preset)))
+        {
+            return;
+        }
+
         LoadItems();
         Activate(_repository.Get(preset.Id) ?? preset);
     }
@@ -171,7 +184,11 @@ public sealed partial class PrefixPresetsViewModel : ObservableObject
             return;
         }
 
-        _repository.Delete(_activePreset.Id);
+        if (!ExecuteSave(() => _repository.Delete(_activePreset.Id)))
+        {
+            return;
+        }
+
         LoadItems();
         Activate(null);
     }
@@ -230,34 +247,55 @@ public sealed partial class PrefixPresetsViewModel : ObservableObject
             return true;
         }
 
-        try
+        return ExecuteSave(() =>
         {
             _activePreset.Content = Content;
             _repository.Save(_activePreset);
-            LoadItems();
             Activate(_repository.Get(_activePreset.Id) ?? _activePreset);
+            LoadItems();
+        });
+    }
+
+    private bool ExecuteSave(Action action)
+    {
+        try
+        {
+            action();
             return true;
         }
-        catch (ArgumentException)
+        catch (Exception exception)
         {
-            return false;
-        }
-        catch (IOException)
-        {
-            return false;
-        }
-        catch (UnauthorizedAccessException)
-        {
+            _logger?.LogError(exception, "The prefix preset operation failed.");
+            ReportError($"{exception.GetType().Name}: {exception.Message}{Environment.NewLine}{Environment.NewLine}{exception.StackTrace}");
             return false;
         }
     }
 
+    private void ReportError(string message)
+    {
+        ErrorOccurred?.Invoke(this, message);
+    }
+
     private void LoadItems()
     {
-        Items.Clear();
-        foreach (var preset in _repository.GetAll())
+        // Clearing Items resets the bound ComboBox selection; suppress the
+        // SelectedId feedback loop so rebuilding the list never triggers
+        // ConfirmLeavingCurrent()/Activate(null) in the middle of a save.
+        _suppressSelection = true;
+        try
         {
-            Items.Add(new PrefixPresetListItem(preset.Id, preset.Name));
+            Items.Clear();
+            foreach (var preset in _repository.GetAll())
+            {
+                Items.Add(new PrefixPresetListItem(preset.Id, preset.Name));
+            }
+        }
+        finally
+        {
+            // Re-assert the active selection: clearing Items pushes null into the
+            // SelectedValue binding (and the backing field) even when suppressed.
+            SelectedId = _activePreset?.Id;
+            _suppressSelection = false;
         }
     }
 
@@ -266,9 +304,16 @@ public sealed partial class PrefixPresetsViewModel : ObservableObject
         _activePreset = preset;
         _savedContent = preset?.Content ?? string.Empty;
         _suppressSelection = true;
-        SelectedId = preset?.Id;
-        Content = _savedContent;
-        _suppressSelection = false;
+        try
+        {
+            SelectedId = preset?.Id;
+            Content = _savedContent;
+        }
+        finally
+        {
+            _suppressSelection = false;
+        }
+
         IsDirty = false;
         OnPropertyChanged(nameof(SelectedName));
         OnPropertyChanged(nameof(HasSelection));
@@ -287,7 +332,13 @@ public sealed partial class PrefixPresetsViewModel : ObservableObject
     private void RestoreSelection()
     {
         _suppressSelection = true;
-        SelectedId = _activePreset?.Id;
-        _suppressSelection = false;
+        try
+        {
+            SelectedId = _activePreset?.Id;
+        }
+        finally
+        {
+            _suppressSelection = false;
+        }
     }
 }
