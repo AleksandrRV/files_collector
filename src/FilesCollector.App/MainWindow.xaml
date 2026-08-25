@@ -192,9 +192,7 @@
 
   <Window.InputBindings>
     <KeyBinding Key="S" Modifiers="Control" Command="{Binding Presets.SavePresetCommand}" />
-    <KeyBinding Key="S" Modifiers="Control, Shift" Command="{Binding Presets.SavePresetAsCommand}" />
     <KeyBinding Key="O" Modifiers="Control" Command="{Binding OpenOutputCommand}" />
-    <KeyBinding Key="O" Modifiers="Control, Shift" Command="{Binding OpenOutputsCommand}" />
     <KeyBinding Key="B" Modifiers="Control" Command="{Binding ToggleLeftPanelCommand}" />
     <KeyBinding Key="J" Modifiers="Control" Command="{Binding ToggleRightPanelCommand}" />
     <KeyBinding Key="K" Modifiers="Control" Command="{Binding OpenPaletteCommand}" />

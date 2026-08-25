@@ -151,6 +151,20 @@ public partial class MainWindow : Window
 
     private void OnWindowPreviewKeyDown(object sender, KeyEventArgs e)
     {
+        if (e.Key == Key.S && Keyboard.Modifiers == (ModifierKeys.Control | ModifierKeys.Shift))
+        {
+            _viewModel.Presets.SavePresetAsCommand.Execute(null);
+            e.Handled = true;
+            return;
+        }
+
+        if (e.Key == Key.O && Keyboard.Modifiers == (ModifierKeys.Control | ModifierKeys.Shift))
+        {
+            _viewModel.OpenOutputsCommand.Execute(null);
+            e.Handled = true;
+            return;
+        }
+
         if (e.Key == Key.F5)
         {
             if (FileTree.IsKeyboardFocusWithin)
