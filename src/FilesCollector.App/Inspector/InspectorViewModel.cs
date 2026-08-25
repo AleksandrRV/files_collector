@@ -257,7 +257,7 @@ public sealed partial class InspectorViewModel : ObservableObject
             AddLine("```yaml", PreviewLineKind.Meta, null);
             AddLine($"preset: \"{presetName}\"", PreviewLineKind.Meta, null);
             AddLine($"prefix_preset: \"{prefixPresetName}\"", PreviewLineKind.Meta, null);
-            AddLine($"root: \"{redactRoot ? "<redacted>" : rootPath}\"", PreviewLineKind.Meta, null);
+            AddLine($"root: \"{(redactRoot ? "<redacted>" : rootPath)}\"", PreviewLineKind.Meta, null);
             if (plan is not null)
             {
                 AddLine($"included: full {_plan.FullCount}, signatures {_plan.SignaturesCount}, listed {_plan.ListedCount}", PreviewLineKind.Meta, null);

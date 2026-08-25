@@ -605,7 +605,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
         item.IsEnabled = !wasEnabled;
         Filters.UpdateHasActivePatterns();
         ApplyFilterChanges();
-        RegisterUndo($"Pattern {wasEnabled ? "disabled" : "enabled"}: {item.Text}", () =>
+        RegisterUndo($"Pattern {(wasEnabled ? "disabled" : "enabled")}: {item.Text}", () =>
         {
             item.IsEnabled = wasEnabled;
             Filters.UpdateHasActivePatterns();
@@ -2041,7 +2041,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
             new("Refresh tree", "Re-read the visible tree", "F5", PaletteEntryKind.Command, () => SetRoot(Root.ScanRoot)),
             new("Refresh inventory", "Full background scan of the root", null, PaletteEntryKind.Command, () => _ = RefreshInventory(CancellationToken.None)),
             new("Create report", "Generate the Markdown report and manifest", null, PaletteEntryKind.Command, () => { if (GenerateReportCommand.CanExecute(null)) { _ = GenerateReport(CancellationToken.None); } }),
-            new("Open last report", $"Last: {string.IsNullOrEmpty(LastReportName) ? "none" : LastReportName}", "Ctrl+O", PaletteEntryKind.Command, () => { if (CanOpenOutput()) { OpenOutput(); } }),
+            new("Open last report", $"Last: {(string.IsNullOrEmpty(LastReportName) ? "none" : LastReportName)}", "Ctrl+O", PaletteEntryKind.Command, () => { if (CanOpenOutput()) { OpenOutput(); } }),
             new("Open outputs folder", _appPaths.OutputsDirectory, "Ctrl+Shift+O", PaletteEntryKind.Command, OpenOutputs),
             new("Save preset", "Save the active preset", "Ctrl+S", PaletteEntryKind.Command, () => { SaveCurrentPreset(); }),
             new("Save preset as…", "Copy the active preset under a new name", "Ctrl+Shift+S", PaletteEntryKind.Command, () => Presets.SavePresetAsCommand.Execute(null)),
