@@ -114,7 +114,7 @@ public sealed partial class PresetsViewModel : ObservableObject
         return !IsDefaultPreset;
     }
 
-    public partial void OnIsDefaultPresetChanged(bool value)
+    partial void OnIsDefaultPresetChanged(bool value)
     {
         RenamePresetCommand.NotifyCanExecuteChanged();
         DeletePresetCommand.NotifyCanExecuteChanged();

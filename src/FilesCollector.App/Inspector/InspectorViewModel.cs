@@ -156,12 +156,12 @@ public sealed partial class InspectorViewModel : ObservableObject
         ActiveTab = tab;
     }
 
-    public partial void OnActiveTabChanged(InspectorTab value)
+    partial void OnActiveTabChanged(InspectorTab value)
     {
         CanExpand = value != InspectorTab.Details;
     }
 
-    public partial void OnSelectedNodeChanged(FileTreeNode? value)
+    partial void OnSelectedNodeChanged(FileTreeNode? value)
     {
         UpdateDetails();
     }

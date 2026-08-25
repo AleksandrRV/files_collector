@@ -19,9 +19,9 @@ public partial class ModeBadge : UserControl
         ThemeManager.ThemeChanged += OnThemeChanged;
     }
 
-    protected override void OnUnload(System.Windows.RoutedEventArgs e)
+    protected override void OnUnloaded(System.Windows.RoutedEventArgs e)
     {
-        base.OnUnload(e);
+        base.OnUnloaded(e);
         ThemeManager.ThemeChanged -= OnThemeChanged;
     }
 
