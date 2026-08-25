@@ -1310,11 +1310,13 @@
                        FontSize="11"
                        VerticalAlignment="Center"
                        Foreground="{DynamicResource TextSecondaryBrush}">
-              <MultiBinding StringFormat="{}{0:N0}/{1:N0}  ·  {2}">
-                <Binding Path="GenerationCompleted" />
-                <Binding Path="GenerationTotal" />
-                <Binding Path="GenerationCurrentPath" />
-              </MultiBinding>
+              <TextBlock.Text>
+                <MultiBinding StringFormat="{}{0:N0}/{1:N0}  ·  {2}">
+                  <Binding Path="GenerationCompleted" />
+                  <Binding Path="GenerationTotal" />
+                  <Binding Path="GenerationCurrentPath" />
+                </MultiBinding>
+              </TextBlock.Text>
             </TextBlock>
           </StackPanel>
         </Grid>
