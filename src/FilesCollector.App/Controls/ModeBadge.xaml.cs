@@ -17,11 +17,11 @@ public partial class ModeBadge : UserControl
     {
         InitializeComponent();
         ThemeManager.ThemeChanged += OnThemeChanged;
+        Unloaded += OnModeBadgeUnloaded;
     }
 
-    protected override void OnUnloaded(System.Windows.RoutedEventArgs e)
+    private void OnModeBadgeUnloaded(object sender, RoutedEventArgs e)
     {
-        base.OnUnloaded(e);
         ThemeManager.ThemeChanged -= OnThemeChanged;
     }
 
