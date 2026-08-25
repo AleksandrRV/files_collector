@@ -111,7 +111,7 @@ public sealed partial class FormatsViewModel : ObservableObject
 
     public event EventHandler? InvertRequested;
 
-    public event EventHandler<bool> BulkEnableRequested;
+    public event EventHandler<bool>? BulkEnableRequested;
 
     public event EventHandler<CollectionMode>? BulkModeRequested;
 

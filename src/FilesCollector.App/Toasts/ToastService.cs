@@ -9,7 +9,10 @@ public sealed class ToastService
     public ToastService()
     {
         Items = [];
-        _timer = new System.Windows.Threading.DispatcherTimer(Interval: TimeSpan.FromMilliseconds(500));
+        _timer = new System.Windows.Threading.DispatcherTimer
+        {
+            Interval = TimeSpan.FromMilliseconds(500)
+        };
         _timer.Tick += OnTimerTick;
         _timer.Start();
     }

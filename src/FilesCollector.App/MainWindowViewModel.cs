@@ -33,7 +33,6 @@ public sealed partial class MainWindowViewModel : ObservableObject
     private Preset _activePreset = null!;
     private PresetState _savedPresetState = null!;
     private string? _excludedDirectoryPath;
-    private bool _suppressPresetSelection;
     private bool _suppressPrefixPresetState;
     private bool _suppressFilterChanges;
     private CollectionPlan? _currentPlan;
@@ -1066,10 +1065,8 @@ public sealed partial class MainWindowViewModel : ObservableObject
         {
             var preset = CreateCurrentPreset(_activePreset.Id, _activePreset.Name, _activePreset.CreatedAt, _activePreset.UpdatedAt);
             _presetRepository.Save(preset);
-            _suppressPresetSelection = true;
             LoadPresetList();
             ActivatePreset(_presetRepository.Get(preset.Id) ?? preset);
-            _suppressPresetSelection = false;
             Presets.SelectedPresetId = preset.Id;
             StatusText = $"Preset saved: {preset.Name}";
             return true;
@@ -1103,9 +1100,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
         Presets.ActivePresetName = preset.Name;
         Presets.IsDefaultPreset = preset.Id == PresetDefaults.DefaultPresetId;
         Presets.IsDirty = false;
-        _suppressPresetSelection = true;
         Presets.SelectedPresetId = preset.Id;
-        _suppressPresetSelection = false;
         UpdatePresetsCard();
     }
 
@@ -1712,7 +1707,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
         if (item.Mode != node.EffectiveMode)
         {
             node.EffectiveMode = item.Mode;
-            node.OnPropertyChanged(nameof(FileTreeNode.IsDimmed));
+            node.NotifyDerivedPropertiesChanged();
         }
 
         var extensionExtension = Path.GetExtension(node.DisplayName).ToLowerInvariant();
@@ -2178,9 +2173,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
 
     private void RestorePresetSelection()
     {
-        _suppressPresetSelection = true;
         Presets.SelectedPresetId = _activePreset.Id;
-        _suppressPresetSelection = false;
     }
 
     private sealed record PresetState(

@@ -50,13 +50,25 @@ public partial class SizeHistogram : UserControl
         set => SetValue(BucketsProperty, value);
     }
 
+    public static readonly DependencyProperty BucketCountProperty = DependencyProperty.Register(
+        nameof(BucketCount),
+        typeof(int),
+        typeof(SizeHistogram),
+        new PropertyMetadata(0));
+
+    public int BucketCount
+    {
+        get => (int)GetValue(BucketCountProperty);
+        set => SetValue(BucketCountProperty, value);
+    }
+
     private static void OnValueOrRangeChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
     {
         var control = (SizeHistogram)d;
         control._maxKiB = Math.Max(1, control.MaxKiB);
         control.ThresholdSlider.Maximum = control._maxKiB;
         control.ThresholdSlider.Value = Math.Clamp(control.Value, 1, control._maxKiB);
-        control.ValueLabel.Text = control.FormatValue(control.Value);
+        control.ValueLabel.Text = FormatValue(control.Value);
         control.PositionThresholdLine();
     }
 
@@ -65,11 +77,7 @@ public partial class SizeHistogram : UserControl
         var control = (SizeHistogram)d;
         var buckets = (IReadOnlyList<SizeBucket>?)e.NewValue;
         control.BarsHost.ItemsSource = buckets;
-        if (buckets is { Count: > 0 })
-        {
-            control.BarsGrid.Columns = buckets.Count;
-        }
-
+        control.BucketCount = buckets?.Count ?? 0;
         control.PositionThresholdLine();
     }
 

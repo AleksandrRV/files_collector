@@ -36,12 +36,18 @@ public partial class PatternEditor : UserControl
     private static void OnPatternsChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
     {
         var editor = (PatternEditor)d;
-        editor._patterns = (System.Collections.ObjectModel.ObservableCollection<PatternItem>?)e.OldValue;
-        editor._patterns?.CollectionChanged -= editor.OnPatternsCollectionChanged;
+        if (editor._patterns is { } old)
+        {
+            old.CollectionChanged -= editor.OnPatternsCollectionChanged;
+        }
 
         var patterns = (System.Collections.ObjectModel.ObservableCollection<PatternItem>?)e.NewValue;
         editor._patterns = patterns;
-        patterns?.CollectionChanged += editor.OnPatternsCollectionChanged;
+        if (patterns is not null)
+        {
+            patterns.CollectionChanged += editor.OnPatternsCollectionChanged;
+        }
+
         editor.PatternsList.ItemsSource = patterns;
         editor.PatternsList.Visibility = patterns is { Count: > 0 } ? Visibility.Visible : Visibility.Collapsed;
     }

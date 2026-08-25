@@ -79,11 +79,7 @@ public static class ThemeManager
         }
         catch (SystemException)
         {
-            // Ignore registry access problems and default to light.
-        }
-        catch (ObjectDisposedException)
-        {
-            // Ignore registry access problems and default to light.
+            // Covers ObjectDisposedException as well (it derives from SystemException).
         }
 
         return ThemeMode.Light;

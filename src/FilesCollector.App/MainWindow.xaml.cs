@@ -569,11 +569,11 @@ public partial class MainWindow : Window
         }
 
         FileTree.UpdateLayout();
-        var container = FindContainer(FileTree, node);
-        if (container is not null)
+        var target = FindContainer(FileTree, node);
+        if (target is not null)
         {
-            container.IsSelected = true;
-            container.BringIntoView();
+            target.IsSelected = true;
+            target.BringIntoView();
         }
 
         _viewModel.Tree.SelectedNode = node;

@@ -23,10 +23,12 @@
   </UserControl.Resources>
   <StackPanel>
     <Grid Height="56" ClipToBounds="True">
-      <ItemsControl x:Name="BarsHost" ItemTemplate="{StaticResource BarTemplate}">
+      <ItemsControl x:Name="BarsHost"
+                    ItemTemplate="{StaticResource BarTemplate}"
+                    DataContext="{Binding RelativeSource={RelativeSource AncestorType=UserControl}}">
         <ItemsControl.ItemsPanel>
           <ItemsPanelTemplate>
-            <UniformGrid x:Name="BarsGrid" Rows="1" />
+            <UniformGrid Rows="1" Columns="{Binding BucketCount}" />
           </ItemsPanelTemplate>
         </ItemsControl.ItemsPanel>
       </ItemsControl>

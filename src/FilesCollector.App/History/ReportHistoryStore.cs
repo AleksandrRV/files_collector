@@ -36,9 +36,8 @@ public sealed class ReportHistoryStore : IReportHistoryStore
                     var manifestPath = Path.ChangeExtension(reportPath, ".manifest.json");
                     var manifest = File.Exists(manifestPath) ? TryLoadManifest(manifestPath) : null;
 
-                    var createdAt = manifest?.CreatedAt
-                        ?? (File.Exists(manifestPath) ? File.GetLastWriteTimeUtc(manifestPath) : fileInfo.LastWriteTimeUtc).ToUniversalTime()
-                        .ToOffset(TimeSpan.Zero);
+                    var fileTimeUtc = (File.Exists(manifestPath) ? File.GetLastWriteTimeUtc(manifestPath) : fileInfo.LastWriteTimeUtc).ToUniversalTime();
+                    var createdAt = manifest?.CreatedAt ?? new DateTimeOffset(fileTimeUtc, TimeSpan.Zero);
 
                     entries.Add(new ReportHistoryEntry(
                         Path.GetFileNameWithoutExtension(reportPath),

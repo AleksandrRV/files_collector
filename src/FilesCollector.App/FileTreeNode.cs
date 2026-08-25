@@ -155,6 +155,14 @@ public sealed partial class FileTreeNode : ObservableObject
         return new FileTreeNode(string.Empty, string.Empty, "Loading...", EntryKind.File, false, true, null, true);
     }
 
+    public void NotifyDerivedPropertiesChanged()
+    {
+        OnPropertyChanged(nameof(EffectiveModeText));
+        OnPropertyChanged(nameof(RuleSourceText));
+        OnPropertyChanged(nameof(HasLocalRule));
+        OnPropertyChanged(nameof(IsDimmed));
+    }
+
     public void ApplyRuleResolution(RuleResolution resolution)
     {
         EffectiveMode = resolution.Mode;
