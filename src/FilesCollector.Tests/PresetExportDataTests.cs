@@ -33,7 +33,8 @@ public sealed class PresetExportDataTests
                 ExcludePatterns = ["**/node_modules/**"],
                 RedactRootPath = true,
                 IncludeFileMetadataBlocks = false,
-                InventoryRefreshMinutes = 7
+                InventoryRefreshMinutes = 7,
+                GitIgnorePath = @"C:\roots\demo\.gitignore"
             }
         };
 
@@ -47,6 +48,15 @@ public sealed class PresetExportDataTests
         restored.ExtensionRules.Should().BeEquivalentTo(preset.ExtensionRules);
         restored.PathRules.Should().BeEquivalentTo(preset.PathRules);
         restored.ScanOptions.Should().BeEquivalentTo(preset.ScanOptions);
+    }
+
+    [Fact]
+    public void Gitignore_path_is_omitted_when_the_option_is_not_used()
+    {
+        var json = PresetExportData.FromPreset(new Preset { Name = "Demo" }).Serialize();
+
+        json.Should().NotContain("gitIgnorePath");
+        PresetExportData.Deserialize(json).ToPreset("Demo", @"C:\roots\demo").ScanOptions.GitIgnorePath.Should().BeEmpty();
     }
 
     [Fact]

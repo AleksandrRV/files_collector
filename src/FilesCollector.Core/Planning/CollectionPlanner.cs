@@ -1,4 +1,5 @@
 using FilesCollector.Core.FileSystem;
+using FilesCollector.Core.Ignore;
 using FilesCollector.Core.Inventory;
 using FilesCollector.Core.Presets;
 using FilesCollector.Core.Rules;
@@ -19,7 +20,17 @@ public sealed class CollectionPlanner
         _fileSystem = fileSystem;
     }
 
-    public CollectionPlan CreatePlan(FileInventorySnapshot inventory, RuleSet ruleSet, IReadOnlyList<ExtensionRule> extensionRules, ScanOptions scanOptions)
+    /// <summary>
+    /// Builds the plan from the cached inventory. When <paramref name="gitIgnore"/> is
+    /// provided, matching files are dropped from the plan entirely, so they appear
+    /// neither in the report nor in any statistics.
+    /// </summary>
+    public CollectionPlan CreatePlan(
+        FileInventorySnapshot inventory,
+        RuleSet ruleSet,
+        IReadOnlyList<ExtensionRule> extensionRules,
+        ScanOptions scanOptions,
+        GitIgnoreFilter? gitIgnore = null)
     {
         ArgumentNullException.ThrowIfNull(inventory);
         ArgumentNullException.ThrowIfNull(ruleSet);
@@ -27,8 +38,18 @@ public sealed class CollectionPlanner
         ArgumentNullException.ThrowIfNull(scanOptions);
 
         var items = new List<CollectionPlanItem>(inventory.Files.Count);
+        // Extension statistics are recalculated when a .gitignore filter is active,
+        // because the cached inventory counts also cover the ignored files.
+        var extensionCounts = gitIgnore is null
+            ? null
+            : new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         foreach (var file in inventory.Files)
         {
+            if (gitIgnore is not null && gitIgnore.IsIgnored(file.RelativePath, isDirectory: false))
+            {
+                continue;
+            }
+
             items.Add(BuildItem(
                 file.FullPath,
                 file.RelativePath,
@@ -40,13 +61,26 @@ public sealed class CollectionPlanner
                 ruleSet,
                 extensionRules,
                 scanOptions,
-                extensionCountsToUpdate: null));
+                extensionCounts));
         }
 
-        return new CollectionPlan(items.OrderBy(item => item.RelativePath, StringComparer.OrdinalIgnoreCase).ToArray(), inventory.ExtensionCounts);
+        return new CollectionPlan(
+            items.OrderBy(item => item.RelativePath, StringComparer.OrdinalIgnoreCase).ToArray(),
+            extensionCounts ?? inventory.ExtensionCounts);
     }
 
-    public CollectionPlan CreatePlan(string rootPath, string? excludedDirectoryPath, RuleSet ruleSet, IReadOnlyList<ExtensionRule> extensionRules, ScanOptions scanOptions)
+    /// <summary>
+    /// Builds the plan by walking the file system. When <paramref name="gitIgnore"/> is
+    /// provided, ignored directories are not traversed and ignored files are dropped
+    /// from the plan entirely.
+    /// </summary>
+    public CollectionPlan CreatePlan(
+        string rootPath,
+        string? excludedDirectoryPath,
+        RuleSet ruleSet,
+        IReadOnlyList<ExtensionRule> extensionRules,
+        ScanOptions scanOptions,
+        GitIgnoreFilter? gitIgnore = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(rootPath);
         ArgumentNullException.ThrowIfNull(ruleSet);
@@ -57,7 +91,7 @@ public sealed class CollectionPlanner
         var extensionCounts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         var normalizedRootPath = Path.GetFullPath(rootPath);
         var visitedDirectories = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        VisitDirectory(normalizedRootPath, normalizedRootPath, excludedDirectoryPath, ruleSet, extensionRules, scanOptions, items, extensionCounts, visitedDirectories);
+        VisitDirectory(normalizedRootPath, normalizedRootPath, excludedDirectoryPath, ruleSet, extensionRules, scanOptions, gitIgnore, items, extensionCounts, visitedDirectories);
         return new CollectionPlan(items.OrderBy(item => item.RelativePath, StringComparer.OrdinalIgnoreCase).ToArray(), extensionCounts);
     }
 
@@ -68,6 +102,7 @@ public sealed class CollectionPlanner
         RuleSet ruleSet,
         IReadOnlyList<ExtensionRule> extensionRules,
         ScanOptions scanOptions,
+        GitIgnoreFilter? gitIgnore,
         List<CollectionPlanItem> items,
         Dictionary<string, int> extensionCounts,
         HashSet<string> visitedDirectories)
@@ -81,11 +116,16 @@ public sealed class CollectionPlanner
         foreach (var entry in result.Entries)
         {
             var relativePath = RuleSet.NormalizeRelativePath(Path.GetRelativePath(rootPath, entry.FullPath));
+            if (gitIgnore is not null && gitIgnore.IsIgnored(relativePath, entry.Kind == EntryKind.Directory))
+            {
+                continue;
+            }
+
             ProcessEntry(entry, relativePath, ruleSet, extensionRules, scanOptions, items, extensionCounts);
 
             if (entry.Kind == EntryKind.Directory && entry.IsAccessible && (scanOptions.FollowReparsePoints || !entry.IsReparsePoint))
             {
-                VisitDirectory(rootPath, entry.FullPath, excludedDirectoryPath, ruleSet, extensionRules, scanOptions, items, extensionCounts, visitedDirectories);
+                VisitDirectory(rootPath, entry.FullPath, excludedDirectoryPath, ruleSet, extensionRules, scanOptions, gitIgnore, items, extensionCounts, visitedDirectories);
             }
         }
     }

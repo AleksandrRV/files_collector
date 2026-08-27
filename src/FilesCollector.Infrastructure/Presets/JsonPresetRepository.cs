@@ -100,6 +100,7 @@ public sealed class JsonPresetRepository : IPresetRepository
             normalized.ScanOptions ??= new ScanOptions();
             normalized.ScanOptions.IncludePatterns ??= [];
             normalized.ScanOptions.ExcludePatterns ??= [];
+            normalized.ScanOptions.GitIgnorePath = NormalizeGitIgnorePath(normalized.ScanOptions.GitIgnorePath);
             normalized.PathRules = normalized.PathRules
                 .Select(rule => rule with { RelativePath = RuleSet.NormalizeRelativePath(rule.RelativePath) })
                 .ToList();
@@ -272,6 +273,7 @@ public sealed class JsonPresetRepository : IPresetRepository
             preset.ScanOptions ??= new ScanOptions();
             preset.ScanOptions.IncludePatterns ??= [];
             preset.ScanOptions.ExcludePatterns ??= [];
+            preset.ScanOptions.GitIgnorePath = NormalizeGitIgnorePath(preset.ScanOptions.GitIgnorePath);
             return preset;
         }
         catch (JsonException exception)
@@ -289,6 +291,11 @@ public sealed class JsonPresetRepository : IPresetRepository
             _logger.LogWarning(exception, "Access to the preset file {PresetPath} was denied.", path);
             return null;
         }
+    }
+
+    private static string NormalizeGitIgnorePath(string? gitIgnorePath)
+    {
+        return string.IsNullOrWhiteSpace(gitIgnorePath) ? string.Empty : gitIgnorePath.Trim();
     }
 
     private void WriteJsonAtomically<T>(string path, T value)

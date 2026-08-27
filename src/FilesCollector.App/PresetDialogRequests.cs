@@ -59,3 +59,17 @@ public sealed class PresetImportRequestEventArgs : EventArgs
 
     public bool IsAccepted { get; set; }
 }
+
+public sealed class GitIgnoreSelectionRequestEventArgs : EventArgs
+{
+    public GitIgnoreSelectionRequestEventArgs(string initialDirectory)
+    {
+        InitialDirectory = initialDirectory;
+    }
+
+    public string InitialDirectory { get; }
+
+    public string? FilePath { get; set; }
+
+    public bool IsAccepted { get; set; }
+}

@@ -2,6 +2,7 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using FilesCollector.Core;
 using FilesCollector.Core.FileSystem;
+using FilesCollector.Core.Ignore;
 using FilesCollector.Core.Inventory;
 using FilesCollector.Core.Presets;
 using FilesCollector.Core.Planning;
@@ -31,6 +32,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
     private bool _suppressPrefixPresetState;
     private bool _suppressFilterChanges;
     private CollectionPlan? _currentPlan;
+    private GitIgnoreFilter? _gitIgnoreFilter;
     private FileInventorySnapshot? _inventorySnapshot;
     private CancellationTokenSource? _inventoryRefreshCancellation;
     private Timer? _inventoryRefreshTimer;
@@ -225,6 +227,13 @@ public sealed partial class MainWindowViewModel : ObservableObject
     private bool includeFileMetadataBlocks = true;
 
     [ObservableProperty]
+    [NotifyCanExecuteChangedFor(nameof(ClearGitIgnoreCommand))]
+    private string gitIgnorePath = string.Empty;
+
+    [ObservableProperty]
+    private string gitIgnoreStatus = "No .gitignore file is selected.";
+
+    [ObservableProperty]
     [NotifyCanExecuteChangedFor(nameof(RenamePresetCommand))]
     [NotifyCanExecuteChangedFor(nameof(DeletePresetCommand))]
     private bool isDefaultPreset;
@@ -254,6 +263,40 @@ public sealed partial class MainWindowViewModel : ObservableObject
     private void RefreshPlan()
     {
         UpdatePlan();
+    }
+
+    [RelayCommand]
+    private void SelectGitIgnore()
+    {
+        var initialDirectory = !string.IsNullOrWhiteSpace(GitIgnorePath) && File.Exists(GitIgnorePath)
+            ? Path.GetDirectoryName(Path.GetFullPath(GitIgnorePath))
+            : ScanRoot;
+        var request = new GitIgnoreSelectionRequestEventArgs(initialDirectory ?? string.Empty);
+        GitIgnoreSelectionRequested?.Invoke(this, request);
+        if (!request.IsAccepted || string.IsNullOrWhiteSpace(request.FilePath))
+        {
+            return;
+        }
+
+        var selectedPath = Path.GetFullPath(request.FilePath);
+        if (string.Equals(GitIgnorePath, selectedPath, StringComparison.OrdinalIgnoreCase))
+        {
+            // The same file was chosen again: reload it so that edits made outside the
+            // application are picked up.
+            ReloadGitIgnoreFilter();
+            RebuildTree();
+            UpdatePlan();
+            StatusText = $".gitignore rules reloaded: {selectedPath}";
+            return;
+        }
+
+        GitIgnorePath = selectedPath;
+    }
+
+    [RelayCommand(CanExecute = nameof(CanClearGitIgnore))]
+    private void ClearGitIgnore()
+    {
+        GitIgnorePath = string.Empty;
     }
 
     [RelayCommand(CanExecute = nameof(CanRefreshInventory), IncludeCancelCommand = true)]
@@ -713,6 +756,8 @@ public sealed partial class MainWindowViewModel : ObservableObject
 
     public event EventHandler<PresetImportRequestEventArgs>? PresetImportRequested;
 
+    public event EventHandler<GitIgnoreSelectionRequestEventArgs>? GitIgnoreSelectionRequested;
+
     public void Shutdown()
     {
         _inventoryRefreshCancellation?.Cancel();
@@ -743,6 +788,9 @@ public sealed partial class MainWindowViewModel : ObservableObject
         }
         RootNodes.Clear();
         SelectedNode = null;
+        // .gitignore patterns are resolved against the scan root, so the filter is
+        // rebuilt whenever the root changes.
+        ReloadGitIgnoreFilter();
 
         if (IsApplicationDirectory(normalizedRootPath))
         {
@@ -783,7 +831,13 @@ public sealed partial class MainWindowViewModel : ObservableObject
 
         foreach (var entry in result.Entries)
         {
-            var child = FileTreeNode.FromEntry(entry, GetRelativePath(entry.FullPath));
+            var childRelativePath = GetRelativePath(entry.FullPath);
+            if (_gitIgnoreFilter is not null && _gitIgnoreFilter.IsIgnored(childRelativePath, entry.Kind == EntryKind.Directory))
+            {
+                continue;
+            }
+
+            var child = FileTreeNode.FromEntry(entry, childRelativePath);
             ApplyRuleResolution(child);
             if (child.IsDirectory && child.IsAccessible && !child.IsReparsePoint)
             {
@@ -801,7 +855,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
         }
 
         ApplyTreeFilter();
-        StatusText = $"Loaded {result.Entries.Count} item(s) from {node.FullPath}";
+        StatusText = $"Loaded {node.Children.Count} item(s) from {node.FullPath}";
     }
 
     public void ApplyMode(CollectionMode mode)
@@ -909,6 +963,11 @@ public sealed partial class MainWindowViewModel : ObservableObject
         return SelectedNode is { IsPlaceholder: false, HasLocalRule: true };
     }
 
+    private bool CanClearGitIgnore()
+    {
+        return !string.IsNullOrWhiteSpace(GitIgnorePath);
+    }
+
     private bool CanRenamePreset()
     {
         return !IsDefaultPreset;
@@ -1014,7 +1073,12 @@ public sealed partial class MainWindowViewModel : ObservableObject
             _suppressPrefixPresetState = false;
         }
 
+        var previousGitIgnorePath = _gitIgnoreFilter?.FilePath;
         LoadFilterSettings();
+        // Filter changes are suppressed while the preset settings are loaded, so the
+        // .gitignore filter is refreshed explicitly here.
+        ReloadGitIgnoreFilter();
+        var hasGitIgnoreChanged = !string.Equals(previousGitIgnorePath, _gitIgnoreFilter?.FilePath, StringComparison.OrdinalIgnoreCase);
         _savedPresetState = CreatePresetState();
         ActivePresetName = preset.Name;
         IsDefaultPreset = preset.Id == PresetDefaults.DefaultPresetId;
@@ -1032,6 +1096,14 @@ public sealed partial class MainWindowViewModel : ObservableObject
         }
         OnPropertyChanged(nameof(RuleCount));
         ResetLocalRuleCommand.NotifyCanExecuteChanged();
+        if (hasGitIgnoreChanged)
+        {
+            // The preset brought a different .gitignore selection, so the tree and the
+            // plan are rebuilt with the new rules.
+            RebuildTree();
+            UpdatePlan();
+        }
+
         _appSessionStore.SetLastPresetId(preset.Id);
     }
 
@@ -1109,6 +1181,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
             left.RedactRootPath == right.RedactRootPath &&
             left.IncludeFileMetadataBlocks == right.IncludeFileMetadataBlocks &&
             left.InventoryRefreshMinutes == right.InventoryRefreshMinutes &&
+            string.Equals(left.GitIgnorePath, right.GitIgnorePath, StringComparison.OrdinalIgnoreCase) &&
             left.ExtensionRules.SequenceEqual(right.ExtensionRules) &&
             left.PathRules.SequenceEqual(right.PathRules) &&
             left.IncludePatterns.SequenceEqual(right.IncludePatterns) &&
@@ -1149,6 +1222,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
             _activePreset.ScanOptions.RedactRootPath,
             _activePreset.ScanOptions.IncludeFileMetadataBlocks,
             _activePreset.ScanOptions.InventoryRefreshMinutes,
+            _activePreset.ScanOptions.GitIgnorePath ?? string.Empty,
             _activePreset.ScanOptions.IncludePatterns.ToArray(),
             _activePreset.ScanOptions.ExcludePatterns.ToArray());
     }
@@ -1167,6 +1241,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
             RedactRootPath = _activePreset.ScanOptions.RedactRootPath;
             IncludeFileMetadataBlocks = _activePreset.ScanOptions.IncludeFileMetadataBlocks;
             InventoryRefreshMinutes = _activePreset.ScanOptions.InventoryRefreshMinutes;
+            GitIgnorePath = _activePreset.ScanOptions.GitIgnorePath ?? string.Empty;
             IncludePatternsText = string.Join(Environment.NewLine, _activePreset.ScanOptions.IncludePatterns);
             ExcludePatternsText = string.Join(Environment.NewLine, _activePreset.ScanOptions.ExcludePatterns);
         }
@@ -1192,7 +1267,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
             return;
         }
 
-        var plan = _collectionPlanner.CreatePlan(_inventorySnapshot, _ruleSet, _activePreset.ExtensionRules, _activePreset.ScanOptions);
+        var plan = _collectionPlanner.CreatePlan(_inventorySnapshot, _ruleSet, _activePreset.ExtensionRules, _activePreset.ScanOptions, _gitIgnoreFilter);
         _currentPlan = plan;
         PlanFullCount = plan.FullCount;
         PlanSignaturesCount = plan.SignaturesCount;
@@ -1361,6 +1436,22 @@ public sealed partial class MainWindowViewModel : ObservableObject
         ConfigureInventoryRefreshTimer();
     }
 
+    partial void OnGitIgnorePathChanged(string value)
+    {
+        if (_suppressFilterChanges)
+        {
+            // The preset is being loaded; ActivatePreset reloads the filter afterwards.
+            return;
+        }
+
+        ReloadGitIgnoreFilter();
+        ApplyFilterChanges();
+        RebuildTree();
+        StatusText = string.IsNullOrWhiteSpace(value)
+            ? "The .gitignore filter has been reset."
+            : $".gitignore filter applied: {value}";
+    }
+
     private void ScheduleFilterChanges()
     {
         _filterDebounceTimer?.Dispose();
@@ -1386,6 +1477,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
         _activePreset.ScanOptions.RedactRootPath = RedactRootPath;
         _activePreset.ScanOptions.IncludeFileMetadataBlocks = IncludeFileMetadataBlocks;
         _activePreset.ScanOptions.InventoryRefreshMinutes = Math.Max(0, InventoryRefreshMinutes);
+        _activePreset.ScanOptions.GitIgnorePath = GitIgnorePath.Trim();
         _activePreset.ScanOptions.IncludePatterns = ParsePatterns(IncludePatternsText);
         _activePreset.ScanOptions.ExcludePatterns = ParsePatterns(ExcludePatternsText);
         UpdateDirtyState();
@@ -1505,6 +1597,73 @@ public sealed partial class MainWindowViewModel : ObservableObject
         }, null, TimeSpan.FromSeconds(2), Timeout.InfiniteTimeSpan);
     }
 
+    /// <summary>
+    /// Reloads the rules of the selected .gitignore file. The filter is rebuilt for the
+    /// current scan root because .gitignore patterns are relative to the folder that
+    /// contains the file.
+    /// </summary>
+    private void ReloadGitIgnoreFilter()
+    {
+        _gitIgnoreFilter = null;
+        var configuredPath = GitIgnorePath.Trim();
+        if (string.IsNullOrEmpty(configuredPath))
+        {
+            GitIgnoreStatus = "No .gitignore file is selected.";
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(ScanRoot))
+        {
+            GitIgnoreStatus = "The .gitignore file will be applied once a scan root is loaded.";
+            return;
+        }
+
+        try
+        {
+            var fullPath = Path.GetFullPath(configuredPath);
+            if (!File.Exists(fullPath))
+            {
+                GitIgnoreStatus = $"The .gitignore file was not found: {fullPath}";
+                _logger.LogWarning("The selected .gitignore file {GitIgnorePath} does not exist.", fullPath);
+                return;
+            }
+
+            var filter = GitIgnoreFilter.Load(fullPath, ScanRoot);
+            if (filter.IsEmpty)
+            {
+                GitIgnoreStatus = $"The .gitignore file contains no rules: {fullPath}";
+                return;
+            }
+
+            _gitIgnoreFilter = filter;
+            GitIgnoreStatus = $"{filter.PatternCount} rule(s) applied from {fullPath}";
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
+        {
+            GitIgnoreStatus = $"The .gitignore file could not be read: {exception.Message}";
+            _logger.LogWarning(exception, "The selected .gitignore file {GitIgnorePath} could not be read.", configuredPath);
+        }
+    }
+
+    /// <summary>
+    /// Rebuilds the lazily loaded tree so that a changed .gitignore selection is
+    /// reflected by the already expanded folders as well.
+    /// </summary>
+    private void RebuildTree()
+    {
+        if (RootNodes.Count == 0 || string.IsNullOrWhiteSpace(ScanRoot) || !Directory.Exists(ScanRoot))
+        {
+            return;
+        }
+
+        SelectedNode = null;
+        RootNodes.Clear();
+        var rootNode = FileTreeNode.CreateRoot(ScanRoot);
+        ApplyRuleResolution(rootNode);
+        RootNodes.Add(rootNode);
+        LoadChildren(rootNode);
+    }
+
     private void ApplyTreeFilter()
     {
         foreach (var rootNode in RootNodes)
@@ -1584,6 +1743,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
             RedactRootPath = source.RedactRootPath,
             IncludeFileMetadataBlocks = source.IncludeFileMetadataBlocks,
             InventoryRefreshMinutes = source.InventoryRefreshMinutes,
+            GitIgnorePath = source.GitIgnorePath ?? string.Empty,
             IncludePatterns = source.IncludePatterns.ToList(),
             ExcludePatterns = source.ExcludePatterns.ToList()
         };
@@ -1637,6 +1797,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
         bool RedactRootPath,
         bool IncludeFileMetadataBlocks,
         int InventoryRefreshMinutes,
+        string GitIgnorePath,
         IReadOnlyList<string> IncludePatterns,
         IReadOnlyList<string> ExcludePatterns);
 }

@@ -106,6 +106,39 @@ public sealed class JsonPresetRepositoryTests : IDisposable
         }
     }
 
+    [Fact]
+    public void Selected_gitignore_file_is_stored_in_the_preset()
+    {
+        var repository = CreateRepository();
+        var now = DateTimeOffset.Now;
+        var gitIgnorePath = Path.Combine(_testDirectory, ".gitignore");
+        var preset = new Preset
+        {
+            Id = Guid.NewGuid(),
+            Name = "With gitignore",
+            CreatedAt = now,
+            UpdatedAt = now,
+            ScanOptions = new ScanOptions { GitIgnorePath = "  " + gitIgnorePath + "  " }
+        };
+
+        repository.Save(preset);
+        var restored = CreateRepository().Get(preset.Id);
+
+        restored.Should().NotBeNull();
+        restored!.ScanOptions.GitIgnorePath.Should().Be(gitIgnorePath);
+    }
+
+    [Fact]
+    public void A_preset_saved_without_a_gitignore_file_reports_an_empty_path()
+    {
+        var repository = CreateRepository();
+
+        var restored = repository.Get(PresetDefaults.DefaultPresetId);
+
+        restored.Should().NotBeNull();
+        restored!.ScanOptions.GitIgnorePath.Should().BeEmpty();
+    }
+
     private JsonPresetRepository CreateRepository()
     {
         var executablePath = Path.Combine(_testDirectory, "files-collector", "FilesCollector.exe");

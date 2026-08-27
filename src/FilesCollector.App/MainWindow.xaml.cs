@@ -29,6 +29,7 @@ public partial class MainWindow : Window
         _viewModel.OutputOpenRequested += OnOutputOpenRequested;
         _viewModel.PresetExportRequested += OnPresetExportRequested;
         _viewModel.PresetImportRequested += OnPresetImportRequested;
+        _viewModel.GitIgnoreSelectionRequested += OnGitIgnoreSelectionRequested;
         _subscriptionsAttached = true;
         DataContext = _viewModel;
     }
@@ -49,6 +50,7 @@ public partial class MainWindow : Window
             _viewModel.OutputOpenRequested -= OnOutputOpenRequested;
             _viewModel.PresetExportRequested -= OnPresetExportRequested;
             _viewModel.PresetImportRequested -= OnPresetImportRequested;
+            _viewModel.GitIgnoreSelectionRequested -= OnGitIgnoreSelectionRequested;
             _viewModel.Shutdown();
             _subscriptionsAttached = false;
         }
@@ -180,6 +182,24 @@ public partial class MainWindow : Window
             Title = "Import preset",
             Filter = "JSON preset (*.json)|*.json|All files (*.*)|*.*",
             CheckFileExists = true
+        };
+
+        if (dialog.ShowDialog(this) == true)
+        {
+            e.FilePath = dialog.FileName;
+            e.IsAccepted = true;
+        }
+    }
+
+    private void OnGitIgnoreSelectionRequested(object? sender, GitIgnoreSelectionRequestEventArgs e)
+    {
+        var dialog = new OpenFileDialog
+        {
+            Title = "Select a .gitignore file",
+            Filter = "Git ignore files (.gitignore)|.gitignore;*.gitignore|All files (*.*)|*.*",
+            FileName = ".gitignore",
+            CheckFileExists = true,
+            InitialDirectory = Directory.Exists(e.InitialDirectory) ? e.InitialDirectory : string.Empty
         };
 
         if (dialog.ShowDialog(this) == true)

@@ -1,4 +1,6 @@
 using FilesCollector.Core.FileSystem;
+using FilesCollector.Core.Ignore;
+using FilesCollector.Core.Inventory;
 using FilesCollector.Core.Planning;
 using FilesCollector.Core.Presets;
 using FilesCollector.Core.Rules;
@@ -89,6 +91,77 @@ public sealed class CollectionPlannerTests
 
         plan.Items.Should().ContainSingle().Which.Mode.Should().Be(CollectionMode.Excluded);
         plan.Items.Should().ContainSingle().Which.Reason.Should().Be("excluded_pattern");
+    }
+
+    [Fact]
+    public void Gitignore_matches_are_dropped_from_the_plan_and_their_folders_are_not_traversed()
+    {
+        var root = Path.GetFullPath(Path.Combine(Path.GetTempPath(), "FilesCollectorTests", "planner-gitignore"));
+        var keptPath = Path.Combine(root, "src", "Program.cs");
+        var ignoredPath = Path.Combine(root, "src", "bin", "app.dll");
+        var ignoredLogPath = Path.Combine(root, "src", "trace.log");
+        var fileSystem = new TestFileSystem(new Dictionary<string, IReadOnlyList<FileSystemEntry>>
+        {
+            [root] = [DirectoryEntry(Path.Combine(root, "src"))],
+            [Path.Combine(root, "src")] =
+            [
+                FileEntry(keptPath),
+                FileEntry(ignoredLogPath),
+                DirectoryEntry(Path.Combine(root, "src", "bin"))
+            ],
+            [Path.Combine(root, "src", "bin")] = [FileEntry(ignoredPath)]
+        });
+        var planner = new CollectionPlanner(fileSystem);
+        var gitIgnore = GitIgnoreFilter.Create(Path.Combine(root, ".gitignore"), root, ["bin/", "*.log"]);
+
+        var plan = planner.CreatePlan(root, null, new RuleSet(), [], new ScanOptions(), gitIgnore);
+
+        plan.Items.Should().ContainSingle().Which.RelativePath.Should().Be("src/Program.cs");
+        plan.ExcludedCount.Should().Be(0);
+        plan.ExtensionCounts[".cs"].Should().Be(1);
+        plan.ExtensionCounts.ContainsKey(".dll").Should().BeFalse();
+    }
+
+    [Fact]
+    public void Gitignore_matches_are_dropped_from_an_inventory_plan_and_from_the_extension_statistics()
+    {
+        var root = Path.GetFullPath(Path.Combine(Path.GetTempPath(), "FilesCollectorTests", "planner-gitignore-inventory"));
+        var inventory = new FileInventorySnapshot
+        {
+            RootPath = root,
+            Files =
+            [
+                new FileInventoryEntry(Path.Combine(root, "src", "Program.cs"), "src/Program.cs", ".cs", 100, false, false, true, null),
+                new FileInventoryEntry(Path.Combine(root, "src", "bin", "app.dll"), "src/bin/app.dll", ".dll", 400, false, false, true, null)
+            ],
+            ExtensionCounts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase) { [".cs"] = 1, [".dll"] = 1 }
+        };
+        var planner = new CollectionPlanner(new TestFileSystem(new Dictionary<string, IReadOnlyList<FileSystemEntry>>()));
+        var gitIgnore = GitIgnoreFilter.Create(Path.Combine(root, ".gitignore"), root, ["bin/"]);
+
+        var plan = planner.CreatePlan(inventory, new RuleSet(), [], new ScanOptions(), gitIgnore);
+
+        plan.Items.Should().ContainSingle().Which.RelativePath.Should().Be("src/Program.cs");
+        plan.ExtensionCounts.ContainsKey(".dll").Should().BeFalse();
+        plan.EstimatedBytes.Should().Be(100);
+    }
+
+    [Fact]
+    public void Without_a_gitignore_filter_the_inventory_extension_counts_are_preserved()
+    {
+        var root = Path.GetFullPath(Path.Combine(Path.GetTempPath(), "FilesCollectorTests", "planner-no-gitignore"));
+        var inventory = new FileInventorySnapshot
+        {
+            RootPath = root,
+            Files = [new FileInventoryEntry(Path.Combine(root, "src", "bin", "app.dll"), "src/bin/app.dll", ".dll", 400, false, false, true, null)],
+            ExtensionCounts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase) { [".dll"] = 1 }
+        };
+        var planner = new CollectionPlanner(new TestFileSystem(new Dictionary<string, IReadOnlyList<FileSystemEntry>>()));
+
+        var plan = planner.CreatePlan(inventory, new RuleSet(), [], new ScanOptions());
+
+        plan.Items.Should().ContainSingle();
+        plan.ExtensionCounts[".dll"].Should().Be(1);
     }
 
     private static FileSystemEntry DirectoryEntry(string path)

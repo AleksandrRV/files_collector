@@ -60,7 +60,8 @@ public sealed class PresetExportData
                 ExcludePatterns = [.. scanOptions.ExcludePatterns],
                 RedactRootPath = scanOptions.RedactRootPath,
                 IncludeFileMetadataBlocks = scanOptions.IncludeFileMetadataBlocks,
-                InventoryRefreshMinutes = scanOptions.InventoryRefreshMinutes
+                InventoryRefreshMinutes = scanOptions.InventoryRefreshMinutes,
+                GitIgnorePath = string.IsNullOrWhiteSpace(scanOptions.GitIgnorePath) ? null : scanOptions.GitIgnorePath
             },
             Extensions = preset.ExtensionRules
                 .Select(rule => new ExtensionEntry { Extension = rule.Extension, Enabled = rule.Enabled, Mode = rule.Mode })
@@ -102,7 +103,8 @@ public sealed class PresetExportData
                 ExcludePatterns = [.. scan.ExcludePatterns],
                 RedactRootPath = scan.RedactRootPath,
                 IncludeFileMetadataBlocks = scan.IncludeFileMetadataBlocks,
-                InventoryRefreshMinutes = scan.InventoryRefreshMinutes
+                InventoryRefreshMinutes = scan.InventoryRefreshMinutes,
+                GitIgnorePath = string.IsNullOrWhiteSpace(scan.GitIgnorePath) ? string.Empty : scan.GitIgnorePath.Trim()
             },
             ScanRootPath = scanRootPath,
             PrefixPresetId = null
@@ -179,6 +181,12 @@ public sealed class PresetExportData
         public bool IncludeFileMetadataBlocks { get; set; } = true;
 
         public int InventoryRefreshMinutes { get; set; } = 1;
+
+        /// <summary>
+        /// Optional path of a .gitignore file whose rules hide matching files and
+        /// folders. Omitted from the export file when the option is not used.
+        /// </summary>
+        public string? GitIgnorePath { get; set; }
     }
 
     public sealed class ExtensionEntry
