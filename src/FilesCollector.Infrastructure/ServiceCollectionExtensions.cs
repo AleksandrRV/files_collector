@@ -30,6 +30,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<CollectionPlanner>();
         services.AddSingleton<IClock, SystemClock>();
         services.AddSingleton<IReportWriter, MarkdownReportWriter>();
+        services.AddSingleton<IFileContentProbe, SampledFileContentProbe>();
         services.AddSingleton<IPresetRepository, JsonPresetRepository>();
         services.AddSingleton<IPrefixPresetRepository, JsonPrefixPresetRepository>();
         services.AddSingleton<IAppSessionStore, JsonAppSessionStore>();

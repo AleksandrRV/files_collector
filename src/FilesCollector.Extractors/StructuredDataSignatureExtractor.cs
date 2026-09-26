@@ -26,7 +26,7 @@ public sealed class StructuredDataSignatureExtractor : ISignatureExtractor
             using var document = JsonDocument.Parse(source);
             var lines = new List<string>();
             RenderJson(document.RootElement, lines, 0, null);
-            return new SignatureExtractionResult(true, string.Join(Environment.NewLine, lines) + Environment.NewLine, "json-structure-v1", null);
+            return new SignatureExtractionResult(true, string.Join("\n", lines) + "\n", "json-structure-v1", null);
         }
         catch (JsonException)
         {
@@ -39,7 +39,7 @@ public sealed class StructuredDataSignatureExtractor : ISignatureExtractor
         try
         {
             var lines = new List<string>();
-            foreach (var rawLine in source.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries))
+            foreach (var rawLine in source.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries))
             {
                 var line = rawLine.Split('#')[0].TrimEnd();
                 if (string.IsNullOrWhiteSpace(line) || line.TrimStart().StartsWith('-'))
@@ -57,7 +57,7 @@ public sealed class StructuredDataSignatureExtractor : ISignatureExtractor
 
             return lines.Count == 0
                 ? new SignatureExtractionResult(false, null, "yaml-structure-v1", "signature_extraction_failed")
-                : new SignatureExtractionResult(true, string.Join(Environment.NewLine, lines) + Environment.NewLine, "yaml-structure-v1", null);
+                : new SignatureExtractionResult(true, string.Join("\n", lines) + "\n", "yaml-structure-v1", null);
         }
         catch (Exception)
         {

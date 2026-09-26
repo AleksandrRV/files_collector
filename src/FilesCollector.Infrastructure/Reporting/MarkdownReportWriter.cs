@@ -20,7 +20,6 @@ public sealed class MarkdownReportWriter : IReportWriter
         _appPaths = appPaths;
         _clock = clock;
         _signatureExtractors = signatureExtractors.ToArray();
-        Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
         CleanupTemporaryFiles();
     }
 
@@ -47,7 +46,7 @@ public sealed class MarkdownReportWriter : IReportWriter
             }
 
             using (var stream = new FileStream(temporaryPath, FileMode.Create, FileAccess.Write, FileShare.None))
-            using (var writer = new StreamWriter(stream, new UTF8Encoding(false)))
+            using (var writer = new StreamWriter(stream, new UTF8Encoding(false)) { NewLine = "\n" })
             {
                 WriteReport(writer, request, renderedFiles);
             }
@@ -86,12 +85,17 @@ public sealed class MarkdownReportWriter : IReportWriter
         try
         {
             var bytes = File.ReadAllBytes(item.FullPath);
-            if (IsBinary(bytes))
+            var decoded = TextContentDecoder.Decode(bytes);
+            if (decoded.Kind == TextContentKind.Binary)
             {
                 return new RenderedFile(item, CollectionMode.Listed, null, null, "binary_file");
             }
 
-            var decoded = DecodeText(bytes);
+            if (decoded.Kind == TextContentKind.DecodeFailed || decoded.Content is null)
+            {
+                return new RenderedFile(item, CollectionMode.Listed, null, null, "decode_failed");
+            }
+
             var normalizedContent = NormalizeLineEndings(decoded.Content);
             var hash = Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
             if (item.Mode == CollectionMode.Signatures)
@@ -108,7 +112,7 @@ public sealed class MarkdownReportWriter : IReportWriter
                     return new RenderedFile(item, CollectionMode.Listed, null, null, extraction.ErrorCode ?? "signature_extraction_failed", bytes.LongLength, hash, extraction.ExtractorId);
                 }
 
-                return new RenderedFile(item, CollectionMode.Signatures, extraction.Content, decoded.EncodingName, extraction.ErrorCode, bytes.LongLength, hash, extraction.ExtractorId);
+                return new RenderedFile(item, CollectionMode.Signatures, NormalizeLineEndings(extraction.Content), decoded.EncodingName, extraction.ErrorCode, bytes.LongLength, hash, extraction.ExtractorId);
             }
 
             return new RenderedFile(item, CollectionMode.Full, normalizedContent, decoded.EncodingName, null, bytes.LongLength, hash);
@@ -121,10 +125,6 @@ public sealed class MarkdownReportWriter : IReportWriter
         {
             return new RenderedFile(item, CollectionMode.Listed, null, null, "read_failed");
         }
-        catch (DecoderFallbackException)
-        {
-            return new RenderedFile(item, CollectionMode.Listed, null, null, "decode_failed");
-        }
     }
 
     private void WriteReport(StreamWriter writer, ReportGenerationRequest request, IReadOnlyList<RenderedFile> files)
@@ -135,7 +135,7 @@ public sealed class MarkdownReportWriter : IReportWriter
 
         if (!string.IsNullOrWhiteSpace(request.PrefixContent))
         {
-            writer.WriteLine(request.PrefixContent.TrimEnd());
+            writer.WriteLine(NormalizeLineEndings(request.PrefixContent).TrimEnd());
             writer.WriteLine();
         }
 
@@ -273,7 +273,8 @@ public sealed class MarkdownReportWriter : IReportWriter
             WriteIndented = true,
             Converters = { new JsonStringEnumConverter() }
         };
-        File.WriteAllText(temporaryManifestPath, JsonSerializer.Serialize(manifest, options), new UTF8Encoding(false));
+        // System.Text.Json indents with Environment.NewLine; the manifest uses LF like the report.
+        File.WriteAllText(temporaryManifestPath, NormalizeLineEndings(JsonSerializer.Serialize(manifest, options)) + "\n", new UTF8Encoding(false));
         File.Move(temporaryManifestPath, manifestPath, true);
     }
 
@@ -322,6 +323,12 @@ public sealed class MarkdownReportWriter : IReportWriter
             "hidden_file" => "The file is hidden and hidden files are disabled.",
             "system_file" => "The file is a system file and system files are disabled.",
             "signature_extractor_unavailable" => "No signature extractor is available for this file.",
+            "signature_extraction_failed" => "The signature extractor could not process the file.",
+            "signature_syntax_warning" => "Signatures were extracted from a file with syntax errors.",
+            "vcs_metadata" => "Version-control metadata (.git, .svn, .hg, .bzr) is always excluded.",
+            "file_unavailable" => "The file was not accessible when the inventory was built.",
+            "binary_extension" => "The file extension is a known binary format.",
+            "content_omitted" => "The content was omitted by the collection mode.",
             _ => "The file was omitted by the active collection policy."
         };
     }
@@ -348,49 +355,6 @@ public sealed class MarkdownReportWriter : IReportWriter
         var invalidCharacters = Path.GetInvalidFileNameChars();
         var sanitized = new string(value.Select(character => invalidCharacters.Contains(character) || char.IsWhiteSpace(character) ? '_' : character).ToArray());
         return string.IsNullOrWhiteSpace(sanitized) ? "Preset" : sanitized;
-    }
-
-    private static bool IsBinary(byte[] bytes)
-    {
-        if (bytes.Contains((byte)0))
-        {
-            return true;
-        }
-
-        if (bytes.Length == 0)
-        {
-            return false;
-        }
-
-        var controlBytes = bytes.Count(value => value < 9 || value is > 13 and < 32);
-        return (double)controlBytes / bytes.Length > 0.1;
-    }
-
-    private static DecodedText DecodeText(byte[] bytes)
-    {
-        if (bytes.AsSpan().StartsWith(new byte[] { 0xEF, 0xBB, 0xBF }))
-        {
-            return new DecodedText(new UTF8Encoding(false, true).GetString(bytes[3..]), "utf-8-bom");
-        }
-
-        if (bytes.AsSpan().StartsWith(new byte[] { 0xFF, 0xFE }))
-        {
-            return new DecodedText(Encoding.Unicode.GetString(bytes[2..]), "utf-16-le");
-        }
-
-        if (bytes.AsSpan().StartsWith(new byte[] { 0xFE, 0xFF }))
-        {
-            return new DecodedText(Encoding.BigEndianUnicode.GetString(bytes[2..]), "utf-16-be");
-        }
-
-        try
-        {
-            return new DecodedText(new UTF8Encoding(false, true).GetString(bytes), "utf-8");
-        }
-        catch (DecoderFallbackException)
-        {
-            return new DecodedText(Encoding.GetEncoding(1251, EncoderFallback.ExceptionFallback, DecoderFallback.ExceptionFallback).GetString(bytes), "windows-1251");
-        }
     }
 
     private static string NormalizeLineEndings(string content)
@@ -455,5 +419,4 @@ public sealed class MarkdownReportWriter : IReportWriter
         string? Hash = null,
         string? ExtractorId = null);
 
-    private sealed record DecodedText(string Content, string EncodingName);
 }

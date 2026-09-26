@@ -32,7 +32,7 @@ public sealed class JsonFileInventoryStore : IFileInventoryStore
             }
 
             var snapshot = JsonSerializer.Deserialize<FileInventorySnapshot>(File.ReadAllText(path), _jsonOptions);
-            if (snapshot is null || snapshot.SchemaVersion != 1 || !string.Equals(Path.GetFullPath(snapshot.RootPath), Path.GetFullPath(rootPath), StringComparison.OrdinalIgnoreCase))
+            if (snapshot is null || snapshot.SchemaVersion != FileInventorySnapshot.CurrentSchemaVersion || !string.Equals(Path.GetFullPath(snapshot.RootPath), Path.GetFullPath(rootPath), StringComparison.OrdinalIgnoreCase))
             {
                 return null;
             }
@@ -55,64 +55,117 @@ public sealed class JsonFileInventoryStore : IFileInventoryStore
         }
     }
 
-    public FileInventorySnapshot Refresh(string rootPath, string? excludedDirectoryPath, IProgress<InventoryRefreshProgress>? progress, CancellationToken cancellationToken)
+    /// <summary>Safety net for link chains that the visited-target check cannot see.</summary>
+    private const int MaxDirectoryDepth = 256;
+
+    public FileInventorySnapshot Refresh(string rootPath, string? excludedDirectoryPath, bool followReparsePoints, IProgress<InventoryRefreshProgress>? progress, CancellationToken cancellationToken)
     {
         var normalizedRoot = Path.GetFullPath(rootPath);
         var snapshot = new FileInventorySnapshot
         {
             RootPath = normalizedRoot,
-            CreatedAt = DateTimeOffset.Now
+            CreatedAt = DateTimeOffset.Now,
+            FollowsReparsePoints = followReparsePoints
         };
         var directories = 0;
-        VisitDirectory(normalizedRoot, normalizedRoot, excludedDirectoryPath, snapshot, ref directories, progress, cancellationToken);
+        var walk = new Walk(normalizedRoot, excludedDirectoryPath, followReparsePoints, snapshot, progress, cancellationToken);
+        walk.VisitedTargets.Add(GetCanonicalPath(normalizedRoot));
+        VisitDirectory(walk, normalizedRoot, false, false, 0, ref directories);
         Write(snapshot);
         return snapshot;
     }
 
-    private void VisitDirectory(
-        string rootPath,
-        string directoryPath,
-        string? excludedDirectoryPath,
-        FileInventorySnapshot snapshot,
-        ref int directories,
-        IProgress<InventoryRefreshProgress>? progress,
-        CancellationToken cancellationToken)
+    /// <summary>
+    /// Walks one directory. <paramref name="isInsideHidden"/> and
+    /// <paramref name="isInsideSystem"/> carry the attributes of the ancestors: Windows
+    /// does not propagate the Hidden/System attributes to the entries inside a directory
+    /// (Git for Windows, for example, marks only the <c>.git</c> folder itself as hidden),
+    /// so the flags are inherited explicitly. Version-control metadata directories are
+    /// never traversed; see <see cref="SystemExclusions"/>.
+    /// </summary>
+    private void VisitDirectory(Walk walk, string directoryPath, bool isInsideHidden, bool isInsideSystem, int depth, ref int directories)
     {
-        cancellationToken.ThrowIfCancellationRequested();
+        walk.CancellationToken.ThrowIfCancellationRequested();
         directories++;
-        var result = _fileSystem.GetChildren(directoryPath, excludedDirectoryPath);
+        var result = _fileSystem.GetChildren(directoryPath, walk.ExcludedDirectoryPath);
         foreach (var entry in result.Entries)
         {
-            cancellationToken.ThrowIfCancellationRequested();
+            walk.CancellationToken.ThrowIfCancellationRequested();
+            var isHidden = isInsideHidden || entry.IsHidden;
+            var isSystem = isInsideSystem || entry.IsSystem;
             if (entry.Kind == EntryKind.File)
             {
-                var relativePath = Path.GetRelativePath(rootPath, entry.FullPath).Replace('\\', '/');
+                var relativePath = Path.GetRelativePath(walk.RootPath, entry.FullPath).Replace('\\', '/');
                 var extension = Path.GetExtension(entry.Name).ToLowerInvariant();
                 if (string.IsNullOrEmpty(extension))
                 {
                     extension = "[no extension]";
                 }
 
-                snapshot.Files.Add(new FileInventoryEntry(
+                walk.Snapshot.Files.Add(new FileInventoryEntry(
                     entry.FullPath,
                     relativePath,
                     extension,
                     entry.SizeBytes,
-                    entry.IsHidden,
-                    entry.IsSystem,
+                    isHidden,
+                    isSystem,
                     entry.IsAccessible,
                     entry.AccessError));
-                snapshot.ExtensionCounts[extension] = snapshot.ExtensionCounts.TryGetValue(extension, out var count) ? count + 1 : 1;
-                if (snapshot.Files.Count % 200 == 0)
+                walk.Snapshot.ExtensionCounts[extension] = walk.Snapshot.ExtensionCounts.TryGetValue(extension, out var count) ? count + 1 : 1;
+                if (walk.Snapshot.Files.Count % 200 == 0)
                 {
-                    progress?.Report(new InventoryRefreshProgress(snapshot.Files.Count, directories, relativePath));
+                    walk.Progress?.Report(new InventoryRefreshProgress(walk.Snapshot.Files.Count, directories, relativePath));
                 }
             }
-            else if (entry.IsAccessible && !entry.IsReparsePoint)
+            else if (ShouldTraverse(walk, entry, depth))
             {
-                VisitDirectory(rootPath, entry.FullPath, excludedDirectoryPath, snapshot, ref directories, progress, cancellationToken);
+                VisitDirectory(walk, entry.FullPath, isHidden, isSystem, depth + 1, ref directories);
             }
         }
+    }
+
+    private static bool ShouldTraverse(Walk walk, FileSystemEntry entry, int depth)
+    {
+        if (!entry.IsAccessible || SystemExclusions.IsVcsMetadataName(entry.Name) || depth >= MaxDirectoryDepth)
+        {
+            return false;
+        }
+
+        if (!entry.IsReparsePoint)
+        {
+            return true;
+        }
+
+        // A link is followed only when enabled, and each link target at most once. A
+        // junction that points back to one of its ancestors is therefore walked once more
+        // at most (its target is then known) and the cycle ends; the depth limit is a
+        // further safety net.
+        return walk.FollowReparsePoints && walk.VisitedTargets.Add(GetCanonicalPath(entry.FullPath));
+    }
+
+    /// <summary>Final target of a link, or the path itself for an ordinary directory.</summary>
+    private static string GetCanonicalPath(string directoryPath)
+    {
+        try
+        {
+            var target = new DirectoryInfo(directoryPath).ResolveLinkTarget(returnFinalTarget: true);
+            return Path.TrimEndingDirectorySeparator(Path.GetFullPath(target?.FullName ?? directoryPath));
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or ArgumentException)
+        {
+            return Path.TrimEndingDirectorySeparator(Path.GetFullPath(directoryPath));
+        }
+    }
+
+    private sealed record Walk(
+        string RootPath,
+        string? ExcludedDirectoryPath,
+        bool FollowReparsePoints,
+        FileInventorySnapshot Snapshot,
+        IProgress<InventoryRefreshProgress>? Progress,
+        CancellationToken CancellationToken)
+    {
+        public HashSet<string> VisitedTargets { get; } = new(StringComparer.OrdinalIgnoreCase);
     }
 
     private void Write(FileInventorySnapshot snapshot)

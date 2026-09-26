@@ -32,7 +32,7 @@
                     Margin="10,0,0,0"
                     Orientation="Horizontal"
                     VerticalAlignment="Center">
-          <TextBlock x:Name="SourceText" Width="72" Text="{Binding RuleSourceText}" />
+          <TextBlock x:Name="SourceText" Width="72" Text="{Binding SourceDisplayText}" />
           <TextBlock x:Name="ModeText" Width="92" TextTrimming="CharacterEllipsis" Text="{Binding EffectiveModeText}" />
         </StackPanel>
         <TextBlock Margin="4,0,0,0" Text="{Binding DisplayName}" TextTrimming="CharacterEllipsis" />
@@ -71,6 +71,11 @@
         </DataTrigger>
         <DataTrigger Binding="{Binding RuleSource}" Value="System">
           <Setter TargetName="SourceText" Property="Foreground" Value="{DynamicResource DangerBrush}" />
+        </DataTrigger>
+        <!-- A filter (hidden file, pattern, size, binary content, ...) decided the mode -->
+        <DataTrigger Binding="{Binding IsDecidedByFilter}" Value="True">
+          <Setter TargetName="SourceText" Property="Foreground" Value="{DynamicResource WarningBrush}" />
+          <Setter TargetName="SourceText" Property="FontStyle" Value="Italic" />
         </DataTrigger>
       </HierarchicalDataTemplate.Triggers>
     </HierarchicalDataTemplate>
@@ -203,6 +208,12 @@
           </TabItem>
           <TabItem Header="Formats">
             <DockPanel Margin="8">
+              <DockPanel DockPanel.Dock="Top" Margin="0,0,0,8">
+                <TextBlock DockPanel.Dock="Left" Margin="0,0,8,0" VerticalAlignment="Center" Text="Default mode:" />
+                <ComboBox ItemsSource="{Binding CollectionModes}"
+                          SelectedItem="{Binding DefaultMode}"
+                          ToolTip="Mode of files without a file, folder or extension rule." />
+              </DockPanel>
               <CheckBox DockPanel.Dock="Top" Margin="0,0,0,8" Content="Include all extensions" IsChecked="{Binding IncludeAllExtensions}" />
               <DataGrid AutoGenerateColumns="False"
                         CanUserAddRows="False"

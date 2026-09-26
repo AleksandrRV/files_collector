@@ -56,7 +56,12 @@ public sealed class RuleSet
         return candidatePath.StartsWith(directoryPath + "/", StringComparison.OrdinalIgnoreCase);
     }
 
-    public RuleResolution Resolve(string relativePath, PathRuleKind kind, bool isSystemExcluded = false)
+    /// <summary>
+    /// Resolves the rule-based mode of a path: system exclusion, then the path's own rule,
+    /// then the deepest ancestor directory rule, and finally <paramref name="defaultMode"/>
+    /// (the preset's default mode) with source <see cref="RuleSource.Global"/>.
+    /// </summary>
+    public RuleResolution Resolve(string relativePath, PathRuleKind kind, bool isSystemExcluded = false, CollectionMode defaultMode = CollectionMode.Full)
     {
         if (isSystemExcluded)
         {
@@ -86,7 +91,7 @@ public sealed class RuleSet
             return new RuleResolution(inheritedRule.Mode, RuleSource.Inherited, inheritedRule);
         }
 
-        return new RuleResolution(CollectionMode.Full, RuleSource.Global, null);
+        return new RuleResolution(defaultMode, RuleSource.Global, null);
     }
 
     public static string NormalizeRelativePath(string relativePath)

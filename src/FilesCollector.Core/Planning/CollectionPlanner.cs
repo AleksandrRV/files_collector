@@ -25,12 +25,20 @@ public sealed class CollectionPlanner
     /// provided, matching files are dropped from the plan entirely, so they appear
     /// neither in the report nor in any statistics.
     /// </summary>
+    /// <param name="defaultMode">Mode of files without a path or extension rule (the preset's default mode).</param>
+    /// <param name="contentProbe">
+    /// Cached content classification. A file planned as <c>Full</c> or <c>Signatures</c>
+    /// whose content is known to be binary becomes <c>Listed</c> with reason
+    /// <c>binary_file</c>, exactly as the report writer will render it.
+    /// </param>
     public CollectionPlan CreatePlan(
         FileInventorySnapshot inventory,
         RuleSet ruleSet,
         IReadOnlyList<ExtensionRule> extensionRules,
         ScanOptions scanOptions,
-        GitIgnoreFilter? gitIgnore = null)
+        GitIgnoreFilter? gitIgnore = null,
+        CollectionMode defaultMode = CollectionMode.Full,
+        IFileContentProbe? contentProbe = null)
     {
         ArgumentNullException.ThrowIfNull(inventory);
         ArgumentNullException.ThrowIfNull(ruleSet);
@@ -61,6 +69,8 @@ public sealed class CollectionPlanner
                 ruleSet,
                 extensionRules,
                 scanOptions,
+                defaultMode,
+                contentProbe,
                 extensionCounts));
         }
 
@@ -80,7 +90,9 @@ public sealed class CollectionPlanner
         RuleSet ruleSet,
         IReadOnlyList<ExtensionRule> extensionRules,
         ScanOptions scanOptions,
-        GitIgnoreFilter? gitIgnore = null)
+        GitIgnoreFilter? gitIgnore = null,
+        CollectionMode defaultMode = CollectionMode.Full,
+        IFileContentProbe? contentProbe = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(rootPath);
         ArgumentNullException.ThrowIfNull(ruleSet);
@@ -91,7 +103,8 @@ public sealed class CollectionPlanner
         var extensionCounts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         var normalizedRootPath = Path.GetFullPath(rootPath);
         var visitedDirectories = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        VisitDirectory(normalizedRootPath, normalizedRootPath, excludedDirectoryPath, ruleSet, extensionRules, scanOptions, gitIgnore, items, extensionCounts, visitedDirectories);
+        var context = new PlanContext(ruleSet, extensionRules, scanOptions, gitIgnore, defaultMode, contentProbe);
+        VisitDirectory(normalizedRootPath, normalizedRootPath, excludedDirectoryPath, false, false, context, items, extensionCounts, visitedDirectories);
         return new CollectionPlan(items.OrderBy(item => item.RelativePath, StringComparer.OrdinalIgnoreCase).ToArray(), extensionCounts);
     }
 
@@ -99,10 +112,9 @@ public sealed class CollectionPlanner
         string rootPath,
         string directoryPath,
         string? excludedDirectoryPath,
-        RuleSet ruleSet,
-        IReadOnlyList<ExtensionRule> extensionRules,
-        ScanOptions scanOptions,
-        GitIgnoreFilter? gitIgnore,
+        bool isInsideHidden,
+        bool isInsideSystem,
+        PlanContext context,
         List<CollectionPlanItem> items,
         Dictionary<string, int> extensionCounts,
         HashSet<string> visitedDirectories)
@@ -116,16 +128,22 @@ public sealed class CollectionPlanner
         foreach (var entry in result.Entries)
         {
             var relativePath = RuleSet.NormalizeRelativePath(Path.GetRelativePath(rootPath, entry.FullPath));
-            if (gitIgnore is not null && gitIgnore.IsIgnored(relativePath, entry.Kind == EntryKind.Directory))
+            if (context.GitIgnore is not null && context.GitIgnore.IsIgnored(relativePath, entry.Kind == EntryKind.Directory))
             {
                 continue;
             }
 
-            ProcessEntry(entry, relativePath, ruleSet, extensionRules, scanOptions, items, extensionCounts);
+            // Hidden/System attributes of a directory are inherited by everything inside it.
+            var isHidden = isInsideHidden || entry.IsHidden;
+            var isSystem = isInsideSystem || entry.IsSystem;
+            ProcessEntry(entry, relativePath, isHidden, isSystem, context, items, extensionCounts);
 
-            if (entry.Kind == EntryKind.Directory && entry.IsAccessible && (scanOptions.FollowReparsePoints || !entry.IsReparsePoint))
+            if (entry.Kind == EntryKind.Directory &&
+                entry.IsAccessible &&
+                (context.ScanOptions.FollowReparsePoints || !entry.IsReparsePoint) &&
+                !SystemExclusions.IsVcsMetadataName(entry.Name))
             {
-                VisitDirectory(rootPath, entry.FullPath, excludedDirectoryPath, ruleSet, extensionRules, scanOptions, gitIgnore, items, extensionCounts, visitedDirectories);
+                VisitDirectory(rootPath, entry.FullPath, excludedDirectoryPath, isHidden, isSystem, context, items, extensionCounts, visitedDirectories);
             }
         }
     }
@@ -133,9 +151,9 @@ public sealed class CollectionPlanner
     private static void ProcessEntry(
         FileSystemEntry entry,
         string relativePath,
-        RuleSet ruleSet,
-        IReadOnlyList<ExtensionRule> extensionRules,
-        ScanOptions scanOptions,
+        bool isHidden,
+        bool isSystem,
+        PlanContext context,
         List<CollectionPlanItem> items,
         Dictionary<string, int> extensionCounts)
     {
@@ -151,11 +169,13 @@ public sealed class CollectionPlanner
             extension,
             entry.SizeBytes,
             entry.IsAccessible,
-            entry.IsHidden,
-            entry.IsSystem,
-            ruleSet,
-            extensionRules,
-            scanOptions,
+            isHidden,
+            isSystem,
+            context.RuleSet,
+            context.ExtensionRules,
+            context.ScanOptions,
+            context.DefaultMode,
+            context.ContentProbe,
             extensionCounts));
     }
 
@@ -170,6 +190,8 @@ public sealed class CollectionPlanner
         RuleSet ruleSet,
         IReadOnlyList<ExtensionRule> extensionRules,
         ScanOptions scanOptions,
+        CollectionMode defaultMode,
+        IFileContentProbe? contentProbe,
         Dictionary<string, int>? extensionCountsToUpdate)
     {
         if (extensionCountsToUpdate is not null)
@@ -177,13 +199,20 @@ public sealed class CollectionPlanner
             extensionCountsToUpdate[extension] = extensionCountsToUpdate.TryGetValue(extension, out var count) ? count + 1 : 1;
         }
 
-        var resolution = ruleSet.Resolve(relativePath, PathRuleKind.File);
+        // Version-control metadata is a system exclusion: it wins over every user rule and
+        // is never re-included by size or binary handling below.
+        var resolution = ruleSet.Resolve(relativePath, PathRuleKind.File, SystemExclusions.IsVcsMetadataPath(relativePath), defaultMode);
         var extensionRule = extensionRules.LastOrDefault(rule => string.Equals(NormalizeExtension(rule.Extension), extension, StringComparison.OrdinalIgnoreCase));
         var explicitFileRule = resolution.Source == RuleSource.Local;
         var mode = resolution.Mode;
         string? reason = null;
 
-        if (!isAccessible)
+        if (resolution.Source == RuleSource.System)
+        {
+            mode = CollectionMode.Excluded;
+            reason = SystemExclusions.VcsMetadataReason;
+        }
+        else if (!isAccessible)
         {
             mode = CollectionMode.Listed;
             reason = "file_unavailable";
@@ -229,8 +258,25 @@ public sealed class CollectionPlanner
             reason = "binary_extension";
         }
 
+        // The writer lists binary content instead of rendering it; when the content is
+        // already known, the plan says so too, so counts and estimates match the report.
+        if (mode is CollectionMode.Full or CollectionMode.Signatures &&
+            contentProbe?.TryGetCachedIsBinary(fullPath, sizeBytes) == true)
+        {
+            mode = CollectionMode.Listed;
+            reason = "binary_file";
+        }
+
         return new CollectionPlanItem(fullPath, relativePath, mode, sizeBytes, reason);
     }
+
+    private sealed record PlanContext(
+        RuleSet RuleSet,
+        IReadOnlyList<ExtensionRule> ExtensionRules,
+        ScanOptions ScanOptions,
+        GitIgnoreFilter? GitIgnore,
+        CollectionMode DefaultMode,
+        IFileContentProbe? ContentProbe);
 
     private static bool IsExtensionAllowed(ExtensionRule? extensionRule, ScanOptions scanOptions)
     {

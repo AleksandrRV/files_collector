@@ -73,3 +73,33 @@ public sealed class GitIgnoreSelectionRequestEventArgs : EventArgs
 
     public bool IsAccepted { get; set; }
 }
+
+/// <summary>A message the view shows to the user, for example as a warning dialog.</summary>
+public sealed class UserMessageEventArgs : EventArgs
+{
+    public UserMessageEventArgs(string title, string message)
+    {
+        Title = title;
+        Message = message;
+    }
+
+    public string Title { get; }
+
+    public string Message { get; }
+}
+
+/// <summary>A yes/no question; <see cref="IsConfirmed"/> stays <c>false</c> unless the user agrees.</summary>
+public sealed class ConfirmationRequestEventArgs : EventArgs
+{
+    public ConfirmationRequestEventArgs(string title, string message)
+    {
+        Title = title;
+        Message = message;
+    }
+
+    public string Title { get; }
+
+    public string Message { get; }
+
+    public bool IsConfirmed { get; set; }
+}

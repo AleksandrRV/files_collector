@@ -8,6 +8,10 @@
     <IsPackable>false</IsPackable>
   </PropertyGroup>
   <ItemGroup>
+    <None Update="Golden\report.golden.md" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\docs\schemas\files-collector-preset-v1.schema.json" Link="Schemas\files-collector-preset-v1.schema.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+  <ItemGroup>
     <ProjectReference Include="../FilesCollector.Core/FilesCollector.Core.csproj" />
     <ProjectReference Include="../FilesCollector.Infrastructure/FilesCollector.Infrastructure.csproj" />
     <ProjectReference Include="../FilesCollector.Extractors/FilesCollector.Extractors.csproj" />

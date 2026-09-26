@@ -1,3 +1,4 @@
+using System.ComponentModel;
 using System.Diagnostics;
 using System.Windows;
 using System.Windows.Controls;
@@ -11,6 +12,7 @@ public partial class MainWindow : Window
 {
     private readonly MainWindowViewModel _viewModel;
     private bool _subscriptionsAttached;
+    private bool _closeConfirmed;
 
     public MainWindow(MainWindowViewModel viewModel)
     {
@@ -30,8 +32,38 @@ public partial class MainWindow : Window
         _viewModel.PresetExportRequested += OnPresetExportRequested;
         _viewModel.PresetImportRequested += OnPresetImportRequested;
         _viewModel.GitIgnoreSelectionRequested += OnGitIgnoreSelectionRequested;
+        _viewModel.ErrorOccurred += OnErrorOccurred;
+        _viewModel.ConfirmationRequested += OnConfirmationRequested;
         _subscriptionsAttached = true;
         DataContext = _viewModel;
+    }
+
+    /// <summary>
+    /// Asks about a running report and unsaved preset/prefix changes once. Also used by
+    /// <see cref="App"/> when Windows ends the session, so the user is not asked twice.
+    /// </summary>
+    public bool ConfirmClose()
+    {
+        if (_closeConfirmed || App.IsFatalShutdown)
+        {
+            return true;
+        }
+
+        _closeConfirmed = _viewModel.ConfirmShutdown();
+        return _closeConfirmed;
+    }
+
+    protected override void OnClosing(CancelEventArgs e)
+    {
+        // During Application.Shutdown WPF ignores Cancel, so the question is only asked
+        // for a normal close (window button, Alt+F4) and for the end of the session.
+        if (!ConfirmClose())
+        {
+            e.Cancel = true;
+            return;
+        }
+
+        base.OnClosing(e);
     }
 
     protected override void OnClosed(EventArgs e)
@@ -51,6 +83,8 @@ public partial class MainWindow : Window
             _viewModel.PresetExportRequested -= OnPresetExportRequested;
             _viewModel.PresetImportRequested -= OnPresetImportRequested;
             _viewModel.GitIgnoreSelectionRequested -= OnGitIgnoreSelectionRequested;
+            _viewModel.ErrorOccurred -= OnErrorOccurred;
+            _viewModel.ConfirmationRequested -= OnConfirmationRequested;
             _viewModel.Shutdown();
             _subscriptionsAttached = false;
         }
@@ -145,10 +179,40 @@ public partial class MainWindow : Window
 
     private void OnOutputOpenRequested(object? sender, string outputPath)
     {
-        Process.Start(new ProcessStartInfo(outputPath)
+        if (!File.Exists(outputPath) && !Directory.Exists(outputPath))
         {
-            UseShellExecute = true
-        });
+            ShowWarning("Files Collector", $"The file or folder no longer exists:{Environment.NewLine}{outputPath}");
+            return;
+        }
+
+        try
+        {
+            Process.Start(new ProcessStartInfo(outputPath)
+            {
+                UseShellExecute = true
+            });
+        }
+        catch (Exception exception) when (exception is Win32Exception or InvalidOperationException or FileNotFoundException or PlatformNotSupportedException)
+        {
+            // Typical causes: no application is associated with ".md", or the shell
+            // refused to start it. Opening a file must never bring the application down.
+            ShowWarning("Files Collector", $"The file could not be opened:{Environment.NewLine}{outputPath}{Environment.NewLine}{Environment.NewLine}{exception.Message}");
+        }
+    }
+
+    private void OnErrorOccurred(object? sender, UserMessageEventArgs e)
+    {
+        ShowWarning(e.Title, e.Message);
+    }
+
+    private void OnConfirmationRequested(object? sender, ConfirmationRequestEventArgs e)
+    {
+        e.IsConfirmed = System.Windows.MessageBox.Show(this, e.Message, e.Title, MessageBoxButton.YesNo, MessageBoxImage.Question) == MessageBoxResult.Yes;
+    }
+
+    private void ShowWarning(string title, string message)
+    {
+        System.Windows.MessageBox.Show(this, message, title, MessageBoxButton.OK, MessageBoxImage.Warning);
     }
 
     private void OnToggleThemeClick(object sender, RoutedEventArgs e)

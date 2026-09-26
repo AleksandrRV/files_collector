@@ -1,0 +1,112 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/AleksandrRV/files_collector/docs/schemas/files-collector-preset-v1.schema.json",
+  "title": "Files Collector preset export (files-collector-preset-v1)",
+  "description": "Format of the files written by Preset > Export... and read by Preset > Import.... The application validates the same rules itself (PresetImportValidator); this schema is meant for editors. Property names are case-insensitive for the application, but this schema only knows the canonical camelCase spelling.",
+  "type": "object",
+  "required": ["$schema"],
+  "additionalProperties": false,
+  "properties": {
+    "$schema": {
+      "description": "Format tag. Compared case-insensitively.",
+      "type": "string",
+      "const": "files-collector-preset-v1"
+    },
+    "name": {
+      "description": "Preset name. If it is already taken, the import adds a suffix such as \" (2)\".",
+      "type": "string",
+      "maxLength": 200,
+      "pattern": "^[^<>:\"/\\\\|?*\\u0000-\\u001F]*$"
+    },
+    "defaultMode": {
+      "description": "Collection mode for items without an explicit rule.",
+      "$ref": "#/$defs/collectionMode"
+    },
+    "scan": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "includeAllExtensions": { "type": "boolean", "default": true },
+        "includeHidden": { "type": "boolean", "default": false },
+        "includeSystem": { "type": "boolean", "default": false },
+        "followReparsePoints": { "type": "boolean", "default": false },
+        "maxFileSizeKiB": {
+          "description": "Files larger than this are listed without content. 1 KiB = 1024 bytes; the upper bound is 2 GiB - 1 KiB.",
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 2097151,
+          "default": 5120
+        },
+        "binaryFileMode": {
+          "description": "Mode for known binary extensions (.png, .zip, .exe, ...).",
+          "$ref": "#/$defs/collectionMode",
+          "default": "Listed"
+        },
+        "includePatterns": { "$ref": "#/$defs/patterns" },
+        "excludePatterns": { "$ref": "#/$defs/patterns" },
+        "redactRootPath": { "type": "boolean", "default": false },
+        "includeFileMetadataBlocks": { "type": "boolean", "default": true },
+        "inventoryRefreshMinutes": {
+          "description": "Background inventory refresh period; 0 disables it.",
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1440,
+          "default": 1
+        },
+        "gitIgnorePath": {
+          "description": "Absolute path of a .gitignore file, or null/omitted when the option is not used.",
+          "type": ["string", "null"]
+        }
+      }
+    },
+    "extensions": {
+      "type": "array",
+      "description": "Per-extension rules. Each extension may appear only once (compared after normalization to a lower-case value with a leading dot).",
+      "items": {
+        "type": "object",
+        "required": ["extension"],
+        "additionalProperties": false,
+        "properties": {
+          "extension": {
+            "description": "A single extension such as \".png\" (the leading dot is optional) or \"[no extension]\".",
+            "type": "string",
+            "pattern": "^\\s*(\\[[Nn][Oo] [Ee][Xx][Tt][Ee][Nn][Ss][Ii][Oo][Nn]\\]|\\.?[^.<>:\"/\\\\|?*\\u0000-\\u001F]+)\\s*$"
+          },
+          "enabled": { "type": "boolean", "default": true },
+          "mode": { "$ref": "#/$defs/collectionMode", "default": "Full" }
+        }
+      }
+    },
+    "paths": {
+      "type": "array",
+      "description": "Rules for files and folders. Each (type, path) pair may appear only once.",
+      "items": {
+        "type": "object",
+        "required": ["path"],
+        "additionalProperties": false,
+        "properties": {
+          "path": {
+            "description": "Path relative to the scan root, \"/\"-separated, without \".\" or \"..\" segments. An empty string means the scan root (Directory rules only).",
+            "type": "string",
+            "pattern": "^(?!\\\\\\\\)[^<>:\"|?*\\u0000-\\u001F]*$"
+          },
+          "type": {
+            "enum": ["File", "Directory"],
+            "default": "Directory"
+          },
+          "mode": { "$ref": "#/$defs/collectionMode", "default": "Full" }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "collectionMode": {
+      "enum": ["Full", "Signatures", "Listed", "Excluded"]
+    },
+    "patterns": {
+      "description": "Glob patterns (*, ?, **), one per item.",
+      "type": "array",
+      "items": { "type": "string" }
+    }
+  }
+}

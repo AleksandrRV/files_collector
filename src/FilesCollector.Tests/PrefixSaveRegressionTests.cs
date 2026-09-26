@@ -85,6 +85,7 @@ public sealed class PrefixSaveRegressionTests : IDisposable
             new JsonPresetRepository(paths, NullLogger<JsonPresetRepository>.Instance),
             new JsonAppSessionStore(paths),
             new PrefixPresetsViewModel(prefixRepository),
+            new SampledFileContentProbe(),
             NullLogger<MainWindowViewModel>.Instance);
     }
 
