@@ -18,12 +18,21 @@ public sealed class PresetExportData
         WriteIndented = true,
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
         PropertyNameCaseInsensitive = true,
+        ReadCommentHandling = JsonCommentHandling.Skip,
+        AllowTrailingCommas = true,
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
         Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
         Converters = { new JsonStringEnumConverter() }
     };
 
     public const string CurrentSchema = "files-collector-preset-v1";
+
+    /// <summary>Hand-edited files may contain comments and trailing commas.</summary>
+    private static readonly JsonDocumentOptions DocumentOptions = new()
+    {
+        CommentHandling = JsonCommentHandling.Skip,
+        AllowTrailingCommas = true
+    };
 
     [JsonPropertyName("$schema")]
     public string Schema { get; set; } = CurrentSchema;
@@ -54,13 +63,15 @@ public sealed class PresetExportData
                 IncludeHidden = scanOptions.IncludeHidden,
                 IncludeSystem = scanOptions.IncludeSystem,
                 FollowReparsePoints = scanOptions.FollowReparsePoints,
-                MaxFileSizeKiB = Math.Max(1, scanOptions.MaxFileSizeBytes / 1024),
+                // Values are clamped to the ranges the importer accepts, so an export can always
+                // be imported again.
+                MaxFileSizeKiB = Math.Clamp(scanOptions.MaxFileSizeBytes / 1024, 1, PresetImportValidator.MaxFileSizeKiB),
                 BinaryFileMode = scanOptions.BinaryFileMode,
                 IncludePatterns = [.. scanOptions.IncludePatterns],
                 ExcludePatterns = [.. scanOptions.ExcludePatterns],
                 RedactRootPath = scanOptions.RedactRootPath,
                 IncludeFileMetadataBlocks = scanOptions.IncludeFileMetadataBlocks,
-                InventoryRefreshMinutes = scanOptions.InventoryRefreshMinutes,
+                InventoryRefreshMinutes = Math.Clamp(scanOptions.InventoryRefreshMinutes, 0, PresetImportValidator.MaxInventoryRefreshMinutes),
                 GitIgnorePath = string.IsNullOrWhiteSpace(scanOptions.GitIgnorePath) ? null : scanOptions.GitIgnorePath
             },
             Extensions = preset.ExtensionRules
@@ -85,11 +96,15 @@ public sealed class PresetExportData
             CreatedAt = now,
             UpdatedAt = now,
             GlobalMode = DefaultMode,
-            ExtensionRules = Extensions
-                .Select(entry => new ExtensionRule(entry.Extension.Trim(), entry.Enabled, entry.Mode))
+            // Null checks below keep ToPreset safe even for data that did not go through
+            // Deserialize (and therefore through PresetImportValidator).
+            ExtensionRules = (Extensions ?? [])
+                .Where(entry => entry is not null && !string.IsNullOrWhiteSpace(entry.Extension))
+                .Select(entry => new ExtensionRule(PresetImportValidator.NormalizeExtension(entry.Extension), entry.Enabled, entry.Mode))
                 .ToList(),
-            PathRules = Paths
-                .Select(entry => new PathRule(RuleSet.NormalizeRelativePath(entry.Path), entry.Type, entry.Mode))
+            PathRules = (Paths ?? [])
+                .Where(entry => entry is not null && entry.Path is not null)
+                .Select(entry => new PathRule(RuleSet.NormalizeRelativePath(entry.Path.Trim()), entry.Type, entry.Mode))
                 .ToList(),
             ScanOptions = new ScanOptions
             {
@@ -97,13 +112,13 @@ public sealed class PresetExportData
                 IncludeHidden = scan.IncludeHidden,
                 IncludeSystem = scan.IncludeSystem,
                 FollowReparsePoints = scan.FollowReparsePoints,
-                MaxFileSizeBytes = Math.Max(1, scan.MaxFileSizeKiB) * 1024L,
+                MaxFileSizeBytes = Math.Clamp(scan.MaxFileSizeKiB, 1, PresetImportValidator.MaxFileSizeKiB) * 1024L,
                 BinaryFileMode = scan.BinaryFileMode,
-                IncludePatterns = [.. scan.IncludePatterns],
-                ExcludePatterns = [.. scan.ExcludePatterns],
+                IncludePatterns = CleanPatterns(scan.IncludePatterns),
+                ExcludePatterns = CleanPatterns(scan.ExcludePatterns),
                 RedactRootPath = scan.RedactRootPath,
                 IncludeFileMetadataBlocks = scan.IncludeFileMetadataBlocks,
-                InventoryRefreshMinutes = scan.InventoryRefreshMinutes,
+                InventoryRefreshMinutes = Math.Clamp(scan.InventoryRefreshMinutes, 0, PresetImportValidator.MaxInventoryRefreshMinutes),
                 GitIgnorePath = string.IsNullOrWhiteSpace(scan.GitIgnorePath) ? string.Empty : scan.GitIgnorePath.Trim()
             },
             ScanRootPath = scanRootPath,
@@ -116,36 +131,62 @@ public sealed class PresetExportData
         return JsonSerializer.Serialize(this, SerializerOptions);
     }
 
+    /// <summary>
+    /// Parses and validates an export file. Every problem is reported through one
+    /// <see cref="InvalidDataException"/> whose message lists each problem with its JSON
+    /// path (see <see cref="PresetImportException.GetErrors"/>); no other exception type escapes for malformed input.
+    /// </summary>
     public static PresetExportData Deserialize(string json)
     {
         ArgumentNullException.ThrowIfNull(json);
 
-        PresetExportData? data;
         try
         {
-            using var document = JsonDocument.Parse(json);
+            using var document = JsonDocument.Parse(json, DocumentOptions);
             if (!HasCurrentSchemaTag(document.RootElement))
             {
-                throw new InvalidDataException("The file is not a Files Collector preset export: the \"$schema\" tag is missing or unknown.");
+                throw PresetImportException.Create(
+                    $"The file is not a Files Collector preset export: the \"$schema\" tag is missing or unknown (expected \"{CurrentSchema}\").",
+                    [new PresetImportError("$.$schema", $"expected \"{CurrentSchema}\".")]);
             }
 
-            data = document.Deserialize<PresetExportData>(SerializerOptions);
+            var errors = PresetImportValidator.Validate(document.RootElement);
+            if (errors.Count > 0)
+            {
+                throw PresetImportException.FromErrors(errors);
+            }
+
+            var data = document.Deserialize<PresetExportData>(SerializerOptions)
+                ?? throw PresetImportException.Create("The preset file does not contain a preset.", [new PresetImportError("$", "the value is null.")]);
+            data.Name ??= string.Empty;
+            data.Scan ??= new ScanSection();
+            data.Extensions ??= [];
+            data.Paths ??= [];
+            return data;
         }
         catch (JsonException exception)
         {
-            throw new InvalidDataException($"The preset file is not valid JSON: {exception.Message}", exception);
+            var position = exception.LineNumber is { } line
+                ? $" (line {line + 1}, position {(exception.BytePositionInLine ?? 0) + 1})"
+                : string.Empty;
+            throw PresetImportException.Create(
+                $"The preset file is not valid JSON{position}: {exception.Message}",
+                [new PresetImportError(exception.Path ?? "$", exception.Message)],
+                exception);
         }
-
-        if (data is null)
+        catch (NotSupportedException exception)
         {
-            throw new InvalidDataException("The preset file does not contain a preset.");
+            throw PresetImportException.Create($"The preset file cannot be read: {exception.Message}", [new PresetImportError("$", exception.Message)], exception);
         }
+    }
 
-        data.Name ??= string.Empty;
-        data.Scan ??= new ScanSection();
-        data.Extensions ??= [];
-        data.Paths ??= [];
-        return data;
+    private static List<string> CleanPatterns(List<string>? patterns)
+    {
+        return (patterns ?? [])
+            .Where(pattern => !string.IsNullOrWhiteSpace(pattern))
+            .Select(pattern => pattern.Trim())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
     }
 
     private static bool HasCurrentSchemaTag(JsonElement root)

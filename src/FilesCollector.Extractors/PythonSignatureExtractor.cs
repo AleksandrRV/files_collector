@@ -26,7 +26,7 @@ public sealed class PythonSignatureExtractor : ISignatureExtractor
             var result = lines.Distinct(StringComparer.Ordinal).ToArray();
             return result.Length == 0
                 ? new SignatureExtractionResult(false, null, "python-lexical-v1", "signature_extraction_failed")
-                : new SignatureExtractionResult(true, string.Join(Environment.NewLine, result) + Environment.NewLine, "python-lexical-v1", null);
+                : new SignatureExtractionResult(true, string.Join("\n", result) + "\n", "python-lexical-v1", null);
         }
         catch (Exception)
         {

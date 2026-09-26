@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using FilesCollector.Core;
@@ -35,6 +36,10 @@ public sealed partial class MainWindowViewModel : ObservableObject
     private GitIgnoreFilter? _gitIgnoreFilter;
     private FileInventorySnapshot? _inventorySnapshot;
     private CancellationTokenSource? _inventoryRefreshCancellation;
+    private int _inventoryRefreshGeneration;
+    private CancellationTokenSource? _contentProbeCancellation;
+    private Dictionary<string, CollectionPlanItem> _planItemsByPath = new(StringComparer.OrdinalIgnoreCase);
+    private readonly IFileContentProbe _contentProbe;
     private Timer? _inventoryRefreshTimer;
     private Timer? _searchDebounceTimer;
     private Timer? _filterDebounceTimer;
@@ -52,8 +57,10 @@ public sealed partial class MainWindowViewModel : ObservableObject
         IPresetRepository presetRepository,
         IAppSessionStore appSessionStore,
         PrefixPresetsViewModel prefixPresets,
+        IFileContentProbe contentProbe,
         ILogger<MainWindowViewModel> logger)
     {
+        _contentProbe = contentProbe;
         _uiContext = SynchronizationContext.Current ?? new SynchronizationContext();
         _logger = logger;
         _appPaths = appPaths;
@@ -220,6 +227,10 @@ public sealed partial class MainWindowViewModel : ObservableObject
     [ObservableProperty]
     private CollectionMode binaryFileMode = CollectionMode.Listed;
 
+    /// <summary>Mode of files without a path or extension rule (the preset's default mode).</summary>
+    [ObservableProperty]
+    private CollectionMode defaultMode = CollectionMode.Full;
+
     [ObservableProperty]
     private bool redactRootPath;
 
@@ -300,7 +311,28 @@ public sealed partial class MainWindowViewModel : ObservableObject
     }
 
     [RelayCommand(CanExecute = nameof(CanRefreshInventory), IncludeCancelCommand = true)]
-    private async Task RefreshInventory(CancellationToken cancellationToken)
+    private Task RefreshInventory(CancellationToken cancellationToken)
+    {
+        return RefreshInventoryCoreAsync(cancellationToken);
+    }
+
+    /// <summary>
+    /// Starts an inventory refresh that replaces any refresh still running. Used by the
+    /// scan root change, the periodic timer and the file system watcher; the command above
+    /// is the manual entry point.
+    /// </summary>
+    private void StartInventoryRefresh()
+    {
+        _ = RefreshInventoryCoreAsync(CancellationToken.None);
+    }
+
+    /// <remarks>
+    /// Every run gets a generation number and its own cancellation source (captured in a
+    /// local, never read back from the field). Only the latest generation may publish its
+    /// snapshot, progress or status and clear <see cref="IsRefreshingInventory"/>; a run
+    /// that was replaced finishes silently.
+    /// </remarks>
+    private async Task RefreshInventoryCoreAsync(CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(ScanRoot) || !Directory.Exists(ScanRoot))
         {
@@ -308,24 +340,36 @@ public sealed partial class MainWindowViewModel : ObservableObject
             return;
         }
 
+        if (IsApplicationDirectory(ScanRoot))
+        {
+            InventoryStatus = "Inventory is unavailable: the application directory cannot be scanned.";
+            return;
+        }
+
         _inventoryRefreshCancellation?.Cancel();
-        _inventoryRefreshCancellation?.Dispose();
-        _inventoryRefreshCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        var cancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        _inventoryRefreshCancellation = cancellation;
+        var generation = ++_inventoryRefreshGeneration;
+        var token = cancellation.Token;
         IsRefreshingInventory = true;
         InventoryStatus = "Refreshing inventory...";
         var rootPath = ScanRoot;
         var excludedDirectoryPath = _excludedDirectoryPath;
+        var followReparsePoints = _activePreset.ScanOptions.FollowReparsePoints;
         var progress = new Progress<InventoryRefreshProgress>(value =>
         {
-            InventoryStatus = $"Inventory: {value.DiscoveredFiles} files, {value.DiscoveredDirectories} folders";
+            if (generation == _inventoryRefreshGeneration)
+            {
+                InventoryStatus = $"Inventory: {value.DiscoveredFiles} files, {value.DiscoveredDirectories} folders";
+            }
         });
 
         try
         {
             var snapshot = await Task.Run(
-                () => _inventoryStore.Refresh(rootPath, excludedDirectoryPath, progress, _inventoryRefreshCancellation.Token),
-                _inventoryRefreshCancellation.Token);
-            if (string.Equals(ScanRoot, rootPath, StringComparison.OrdinalIgnoreCase))
+                () => _inventoryStore.Refresh(rootPath, excludedDirectoryPath, followReparsePoints, progress, token),
+                token);
+            if (generation == _inventoryRefreshGeneration && string.Equals(ScanRoot, rootPath, StringComparison.OrdinalIgnoreCase))
             {
                 _inventorySnapshot = snapshot;
                 InventoryStatus = $"Inventory updated: {snapshot.Files.Count} files";
@@ -334,26 +378,38 @@ public sealed partial class MainWindowViewModel : ObservableObject
         }
         catch (OperationCanceledException)
         {
-            InventoryStatus = "Inventory refresh canceled.";
+            if (generation == _inventoryRefreshGeneration)
+            {
+                InventoryStatus = "Inventory refresh canceled.";
+            }
         }
-        catch (IOException exception)
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
         {
-            InventoryStatus = $"Inventory refresh failed: {exception.Message}";
+            if (generation == _inventoryRefreshGeneration)
+            {
+                InventoryStatus = $"Inventory refresh failed: {exception.Message}";
+            }
+
             _logger.LogWarning(exception, "Inventory refresh failed for {RootPath}.", rootPath);
-        }
-        catch (UnauthorizedAccessException exception)
-        {
-            InventoryStatus = $"Inventory refresh failed: {exception.Message}";
-            _logger.LogWarning(exception, "Inventory refresh was denied access for {RootPath}.", rootPath);
         }
         catch (Exception exception)
         {
-            InventoryStatus = $"Inventory refresh failed unexpectedly: {exception.Message}";
+            if (generation == _inventoryRefreshGeneration)
+            {
+                InventoryStatus = $"Inventory refresh failed unexpectedly: {exception.Message}";
+            }
+
             _logger.LogError(exception, "Unexpected inventory refresh failure for {RootPath}.", rootPath);
         }
         finally
         {
-            IsRefreshingInventory = false;
+            if (generation == _inventoryRefreshGeneration)
+            {
+                IsRefreshingInventory = false;
+                _inventoryRefreshCancellation = null;
+            }
+
+            cancellation.Dispose();
         }
     }
 
@@ -364,6 +420,13 @@ public sealed partial class MainWindowViewModel : ObservableObject
         if (_currentPlan is null)
         {
             GenerationStatus = "The report plan is not available.";
+            return;
+        }
+
+        if (!IsSnapshotForCurrentRoot(_inventorySnapshot))
+        {
+            // Defensive: the plan must describe the root written into the report.
+            GenerationStatus = "The report plan does not match the current scan root. Refresh the inventory.";
             return;
         }
 
@@ -418,10 +481,21 @@ public sealed partial class MainWindowViewModel : ObservableObject
     [RelayCommand(CanExecute = nameof(CanOpenOutput))]
     private void OpenOutput()
     {
-        if (!string.IsNullOrWhiteSpace(LastOutputPath))
+        if (string.IsNullOrWhiteSpace(LastOutputPath))
         {
-            OutputOpenRequested?.Invoke(this, LastOutputPath);
+            return;
         }
+
+        if (!File.Exists(LastOutputPath))
+        {
+            // The report was deleted or moved after it had been created.
+            StatusText = $"The report no longer exists: {LastOutputPath}";
+            OpenOutputCommand.NotifyCanExecuteChanged();
+            LoadReportHistory();
+            return;
+        }
+
+        OutputOpenRequested?.Invoke(this, LastOutputPath);
     }
 
     [RelayCommand]
@@ -548,8 +622,54 @@ public sealed partial class MainWindowViewModel : ObservableObject
             return;
         }
 
-        _activePreset.Name = name.Trim();
-        SaveCurrentPreset();
+        RenameActivePreset(name.Trim());
+    }
+
+    /// <summary>
+    /// Renames the stored preset only. Unsaved changes of the working copy stay unsaved
+    /// (the name is not part of the dirty state), so a rename never saves them implicitly.
+    /// </summary>
+    private void RenameActivePreset(string newName)
+    {
+        try
+        {
+            var stored = _presetRepository.Get(_activePreset.Id);
+            if (stored is null)
+            {
+                StatusText = "The preset is no longer available and cannot be renamed.";
+                return;
+            }
+
+            stored.Name = newName;
+            _presetRepository.Save(stored);
+            _activePreset.Name = newName;
+            ActivePresetName = newName;
+            _suppressPresetSelection = true;
+            try
+            {
+                LoadPresetList();
+                SelectedPresetId = _activePreset.Id;
+            }
+            finally
+            {
+                _suppressPresetSelection = false;
+            }
+
+            OnPropertyChanged(nameof(SelectedPresetId));
+            UpdatePreview();
+            StatusText = IsPresetDirty
+                ? $"Preset renamed: {newName}. Other changes are still unsaved."
+                : $"Preset renamed: {newName}";
+        }
+        catch (ArgumentException exception)
+        {
+            StatusText = exception.Message;
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            StatusText = $"Preset rename failed: {exception.Message}";
+            _logger.LogWarning(exception, "Preset rename failed.");
+        }
     }
 
     [RelayCommand(CanExecute = nameof(CanDeletePreset))]
@@ -558,6 +678,11 @@ public sealed partial class MainWindowViewModel : ObservableObject
         var request = new UnsavedChangesRequestEventArgs(ActivePresetName);
         DeletePresetRequested?.Invoke(this, request);
         if (request.Decision != UnsavedChangesDecision.Discard)
+        {
+            return;
+        }
+
+        if (!ConfirmPrefixSwitch(_presetRepository.Get(PresetDefaults.DefaultPresetId)?.PrefixPresetId))
         {
             return;
         }
@@ -574,7 +699,13 @@ public sealed partial class MainWindowViewModel : ObservableObject
     [RelayCommand]
     private void DiscardPresetChanges()
     {
-        ActivatePreset(_presetRepository.Get(_activePreset.Id) ?? GetDefaultPreset());
+        var saved = _presetRepository.Get(_activePreset.Id) ?? GetDefaultPreset();
+        if (!ConfirmPrefixSwitch(saved.PrefixPresetId))
+        {
+            return;
+        }
+
+        ActivatePreset(saved);
         RefreshRulePresentation();
         StatusText = "Unsaved preset changes discarded.";
     }
@@ -592,7 +723,11 @@ public sealed partial class MainWindowViewModel : ObservableObject
 
         try
         {
-            File.WriteAllText(request.FilePath, PresetExportData.FromPreset(_activePreset).Serialize(), new System.Text.UTF8Encoding(false));
+            // The export describes what the user sees, including unsaved changes: path
+            // rules live in the rule set and the prefix in its own view model, so the
+            // preset is assembled from the current state rather than from _activePreset.
+            var current = CreateCurrentPreset(_activePreset.Id, ActivePresetName, _activePreset.CreatedAt, _activePreset.UpdatedAt);
+            File.WriteAllText(request.FilePath, PresetExportData.FromPreset(current).Serialize(), new System.Text.UTF8Encoding(false));
             StatusText = $"Preset exported: {request.FilePath}";
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
@@ -612,16 +747,39 @@ public sealed partial class MainWindowViewModel : ObservableObject
             return;
         }
 
+        PresetExportData data;
         try
         {
-            var data = PresetExportData.Deserialize(File.ReadAllText(request.FilePath));
-            var preset = data.ToPreset(CreateUniqueImportedName(data.Name), ScanRoot);
-
-            if (!ConfirmLeavingActivePreset())
+            var fileInfo = new FileInfo(request.FilePath);
+            if (fileInfo.Length > MaxImportFileBytes)
             {
+                ReportImportFailure(request.FilePath, $"The file is {FormatSize(fileInfo.Length)}; preset files larger than {FormatSize(MaxImportFileBytes)} are not accepted.");
                 return;
             }
 
+            data = PresetExportData.Deserialize(File.ReadAllText(request.FilePath));
+        }
+        catch (InvalidDataException exception)
+        {
+            // The message lists every problem with its JSON path (see PresetImportException).
+            ReportImportFailure(request.FilePath, exception.Message);
+            return;
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or System.Security.SecurityException)
+        {
+            _logger.LogWarning(exception, "Preset import failed for {FilePath}.", request.FilePath);
+            ReportImportFailure(request.FilePath, $"The file could not be read: {exception.Message}");
+            return;
+        }
+
+        if (!ConfirmLeavingActivePreset() || !ConfirmPrefixSwitch(null))
+        {
+            return;
+        }
+
+        try
+        {
+            var preset = data.ToPreset(CreateUniqueImportedName(data.Name), ScanRoot);
             _presetRepository.Save(preset);
             LoadPresetList();
             ActivatePreset(_presetRepository.Get(preset.Id) ?? preset);
@@ -629,30 +787,43 @@ public sealed partial class MainWindowViewModel : ObservableObject
             ResetPresetDirtyState();
             StatusText = $"Preset imported: {preset.Name}";
         }
-        catch (InvalidDataException exception)
-        {
-            StatusText = exception.Message;
-        }
         catch (ArgumentException exception)
         {
-            StatusText = exception.Message;
+            ReportImportFailure(request.FilePath, exception.Message);
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
         {
-            StatusText = $"Preset import failed: {exception.Message}";
-            _logger.LogWarning(exception, "Preset import failed for {FilePath}.", request.FilePath);
+            _logger.LogWarning(exception, "The imported preset could not be saved.");
+            ReportImportFailure(request.FilePath, $"The imported preset could not be saved: {exception.Message}");
         }
     }
 
+    private void ReportImportFailure(string filePath, string details)
+    {
+        StatusText = $"Preset import failed: {Path.GetFileName(filePath)}";
+        _logger.LogInformation("Preset import rejected for {FilePath}: {Details}", filePath, details);
+        ErrorOccurred?.Invoke(this, new UserMessageEventArgs("Preset import failed", $"{filePath}{Environment.NewLine}{Environment.NewLine}{details}"));
+    }
+
+    /// <summary>
+    /// Returns a valid, unused preset name. The imported name is sanitized first: a name
+    /// that can never pass validation (for example one with "?" or "/") would otherwise
+    /// make the numbering loop run forever.
+    /// </summary>
     private string CreateUniqueImportedName(string baseName)
     {
-        var trimmed = string.IsNullOrWhiteSpace(baseName) ? "Imported preset" : baseName.Trim();
+        var trimmed = string.IsNullOrWhiteSpace(baseName) ? "Imported preset" : SanitizeFileName(baseName);
+        if (trimmed.Length > PresetImportValidator.MaxNameLength)
+        {
+            trimmed = trimmed[..PresetImportValidator.MaxNameLength].TrimEnd();
+        }
+
         if (ValidatePresetName(trimmed, null) is null)
         {
             return trimmed;
         }
 
-        for (var index = 2; ; index++)
+        for (var index = 2; index <= 10_000; index++)
         {
             var candidate = $"{trimmed} ({index})";
             if (ValidatePresetName(candidate, null) is null)
@@ -660,6 +831,8 @@ public sealed partial class MainWindowViewModel : ObservableObject
                 return candidate;
             }
         }
+
+        return $"{trimmed} ({Guid.NewGuid():N})";
     }
 
     private static string SanitizeFileName(string value)
@@ -673,6 +846,8 @@ public sealed partial class MainWindowViewModel : ObservableObject
 
     private Timer? _toastTimer;
 
+    private const long MaxImportFileBytes = 16L * 1024 * 1024;
+
     [RelayCommand]
     private void RefreshReportHistory()
     {
@@ -682,10 +857,22 @@ public sealed partial class MainWindowViewModel : ObservableObject
     [RelayCommand]
     private void OpenHistoryReport(ReportHistoryItem? item)
     {
-        if (item is not null)
+        if (item is null)
         {
-            OutputOpenRequested?.Invoke(this, item.FilePath);
+            return;
         }
+
+        if (!File.Exists(item.FilePath))
+        {
+            // The history is a snapshot of the outputs folder; the file may have been
+            // deleted since. Drop the stale entry instead of failing to open it.
+            ReportHistory.Remove(item);
+            StatusText = $"The report no longer exists: {item.DisplayName}";
+            OpenOutputCommand.NotifyCanExecuteChanged();
+            return;
+        }
+
+        OutputOpenRequested?.Invoke(this, item.FilePath);
     }
 
     [RelayCommand]
@@ -758,10 +945,42 @@ public sealed partial class MainWindowViewModel : ObservableObject
 
     public event EventHandler<GitIgnoreSelectionRequestEventArgs>? GitIgnoreSelectionRequested;
 
+    /// <summary>An error the user has to read (a dialog, not just the status bar).</summary>
+    public event EventHandler<UserMessageEventArgs>? ErrorOccurred;
+
+    public event EventHandler<ConfirmationRequestEventArgs>? ConfirmationRequested;
+
+    /// <summary>
+    /// Called before the main window closes. Asks about a running report and about
+    /// unsaved preset and prefix changes; returns <c>false</c> when closing must be
+    /// cancelled.
+    /// </summary>
+    public bool ConfirmShutdown()
+    {
+        if (IsGeneratingReport)
+        {
+            var request = new ConfirmationRequestEventArgs(
+                "Report generation in progress",
+                "A report is being generated. Cancel it and exit?");
+            ConfirmationRequested?.Invoke(this, request);
+            if (!request.IsConfirmed)
+            {
+                return false;
+            }
+
+            GenerateReportCancelCommand.Execute(null);
+        }
+
+        return ConfirmLeavingActivePreset() && PrefixPresets.ConfirmLeavingCurrent();
+    }
+
     public void Shutdown()
     {
+        _inventoryRefreshGeneration++;
         _inventoryRefreshCancellation?.Cancel();
-        _inventoryRefreshCancellation?.Dispose();
+        _inventoryRefreshCancellation = null;
+        _contentProbeCancellation?.Cancel();
+        _contentProbeCancellation = null;
         _inventoryRefreshTimer?.Dispose();
         _searchDebounceTimer?.Dispose();
         _filterDebounceTimer?.Dispose();
@@ -794,7 +1013,16 @@ public sealed partial class MainWindowViewModel : ObservableObject
 
         if (IsApplicationDirectory(normalizedRootPath))
         {
+            // The application directory is a system exclusion, so nothing inside it can be
+            // collected. Everything that still describes the previous root (inventory, plan,
+            // background refresh) is dropped; otherwise "Create report" would write the old
+            // root's files under the new root's name.
             _excludedDirectoryPath = normalizedRootPath;
+            StopInventoryMonitoring();
+            _inventorySnapshot = null;
+            InventoryStatus = "Inventory is unavailable: the application directory cannot be scanned.";
+            UpdatePlan();
+            RefreshInventoryCommand.NotifyCanExecuteChanged();
             StatusText = "The application directory is excluded from scanning.";
             return;
         }
@@ -814,13 +1042,13 @@ public sealed partial class MainWindowViewModel : ObservableObject
         UpdatePlan();
         ConfigureInventoryRefreshTimer();
         ConfigureInventoryWatcher();
-        _ = RefreshInventory(CancellationToken.None);
+        StartInventoryRefresh();
         StatusText = $"Scan root loaded: {normalizedRootPath}";
     }
 
     public void LoadChildren(FileTreeNode? node)
     {
-        if (node is null || !node.IsDirectory || !node.IsAccessible || node.IsReparsePoint || node.AreChildrenLoaded)
+        if (node is null || !node.IsDirectory || !node.IsAccessible || (node.IsReparsePoint && !FollowReparsePoints) || node.AreChildrenLoaded)
         {
             return;
         }
@@ -839,9 +1067,9 @@ public sealed partial class MainWindowViewModel : ObservableObject
 
             var child = FileTreeNode.FromEntry(entry, childRelativePath);
             ApplyRuleResolution(child);
-            if (child.IsDirectory && child.IsAccessible && !child.IsReparsePoint)
+            if (child.IsDirectory && child.IsAccessible && (!child.IsReparsePoint || FollowReparsePoints))
             {
-                child.MarkChildrenUnloaded();
+                child.MarkChildrenUnloaded(allowReparsePoint: FollowReparsePoints);
             }
 
             node.Children.Add(child);
@@ -920,9 +1148,11 @@ public sealed partial class MainWindowViewModel : ObservableObject
 
         if (value is not null && !value.IsPlaceholder)
         {
-            SelectedMode = value.EffectiveMode;
+            // The mode panel edits rules, so it starts from the rule mode, not from a filter outcome.
+            SelectedMode = value.RuleMode;
             StatusText = value.ToolTipText;
-            SelectedNodeDetails = $"Path: {value.RelativePath}{Environment.NewLine}Mode: {value.EffectiveModeText}{Environment.NewLine}Source: {value.RuleSourceText}{Environment.NewLine}Status: {value.StatusText}";
+            var reason = value.PlanReason is null ? string.Empty : $"{Environment.NewLine}Reason: {value.PlanReason}";
+            SelectedNodeDetails = $"Path: {value.RelativePath}{Environment.NewLine}Mode: {value.EffectiveModeText}{reason}{Environment.NewLine}Source: {value.SourceDisplayText}{Environment.NewLine}Status: {value.StatusText}";
         }
         else
         {
@@ -940,7 +1170,10 @@ public sealed partial class MainWindowViewModel : ObservableObject
 
     private bool CanRefreshInventory()
     {
-        return !IsRefreshingInventory && !string.IsNullOrWhiteSpace(ScanRoot) && Directory.Exists(ScanRoot);
+        return !IsRefreshingInventory &&
+            !string.IsNullOrWhiteSpace(ScanRoot) &&
+            Directory.Exists(ScanRoot) &&
+            !IsApplicationDirectory(ScanRoot);
     }
 
     private bool CanGenerateReport()
@@ -995,6 +1228,16 @@ public sealed partial class MainWindowViewModel : ObservableObject
         return request.Decision != UnsavedChangesDecision.Cancel;
     }
 
+    /// <summary>
+    /// Activating a preset selects its prefix preset. When that changes the prefix and the
+    /// current prefix has unsaved changes, the user decides first; activating the preset
+    /// afterwards can then no longer be interrupted by the prefix question.
+    /// </summary>
+    private bool ConfirmPrefixSwitch(Guid? targetPrefixPresetId)
+    {
+        return PrefixPresets.SelectedId == targetPrefixPresetId || PrefixPresets.ConfirmLeavingCurrent();
+    }
+
     private void TrySwitchPreset(Guid id)
     {
         if (!ConfirmLeavingActivePreset())
@@ -1007,6 +1250,12 @@ public sealed partial class MainWindowViewModel : ObservableObject
         if (preset is null)
         {
             StatusText = "The selected preset is no longer available.";
+            RestorePresetSelection();
+            return;
+        }
+
+        if (!ConfirmPrefixSwitch(preset.PrefixPresetId))
+        {
             RestorePresetSelection();
             return;
         }
@@ -1066,7 +1315,13 @@ public sealed partial class MainWindowViewModel : ObservableObject
         _suppressPrefixPresetState = true;
         try
         {
-            PrefixPresets.Select(preset.PrefixPresetId);
+            if (!PrefixPresets.Select(preset.PrefixPresetId))
+            {
+                // Callers confirm the prefix switch beforehand, so this only happens when
+                // saving the previous prefix failed; the preset then keeps its prefix id
+                // and is marked as changed below.
+                _logger.LogWarning("The prefix preset of preset {PresetName} could not be selected.", preset.Name);
+            }
         }
         finally
         {
@@ -1238,6 +1493,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
             FollowReparsePoints = _activePreset.ScanOptions.FollowReparsePoints;
             MaxFileSizeKiB = Math.Max(1, (int)Math.Min(int.MaxValue, _activePreset.ScanOptions.MaxFileSizeBytes / 1024));
             BinaryFileMode = _activePreset.ScanOptions.BinaryFileMode;
+            DefaultMode = _activePreset.GlobalMode;
             RedactRootPath = _activePreset.ScanOptions.RedactRootPath;
             IncludeFileMetadataBlocks = _activePreset.ScanOptions.IncludeFileMetadataBlocks;
             InventoryRefreshMinutes = _activePreset.ScanOptions.InventoryRefreshMinutes;
@@ -1253,8 +1509,15 @@ public sealed partial class MainWindowViewModel : ObservableObject
 
     private void UpdatePlan()
     {
-        if (_inventorySnapshot is null)
+        if (!IsSnapshotForCurrentRoot(_inventorySnapshot))
         {
+            // No inventory for the current root: clear the previous plan as well, so no
+            // command (Create report, Preview) can use data that belongs to another root.
+            _currentPlan = null;
+            _planItemsByPath = new Dictionary<string, CollectionPlanItem>(StringComparer.OrdinalIgnoreCase);
+            _contentProbeCancellation?.Cancel();
+            _contentProbeCancellation = null;
+            GenerateReportCommand.NotifyCanExecuteChanged();
             PlanSummary = "Plan is unavailable until the inventory is loaded.";
             PlanFullCount = 0;
             PlanSignaturesCount = 0;
@@ -1264,11 +1527,21 @@ public sealed partial class MainWindowViewModel : ObservableObject
             IsPlanLargeReport = false;
             ExcludedByPatternsText = string.Empty;
             NotIncludedByPatternsText = string.Empty;
+            UpdatePreview();
+            RefreshRulePresentation();
             return;
         }
 
-        var plan = _collectionPlanner.CreatePlan(_inventorySnapshot, _ruleSet, _activePreset.ExtensionRules, _activePreset.ScanOptions, _gitIgnoreFilter);
+        var plan = _collectionPlanner.CreatePlan(
+            _inventorySnapshot,
+            _ruleSet,
+            _activePreset.ExtensionRules,
+            _activePreset.ScanOptions,
+            _gitIgnoreFilter,
+            _activePreset.GlobalMode,
+            _contentProbe);
         _currentPlan = plan;
+        _planItemsByPath = plan.Items.ToDictionary(item => item.RelativePath, StringComparer.OrdinalIgnoreCase);
         PlanFullCount = plan.FullCount;
         PlanSignaturesCount = plan.SignaturesCount;
         PlanListedCount = plan.ListedCount;
@@ -1284,8 +1557,72 @@ public sealed partial class MainWindowViewModel : ObservableObject
         GenerateReportCommand.NotifyCanExecuteChanged();
         LoadExtensionRuleItems(plan.ExtensionCounts);
         var warning = plan.EstimatedBytes > 25L * 1024 * 1024 ? " · Large report warning" : string.Empty;
-        PlanSummary = $"Full: {plan.FullCount} · Signatures: {plan.SignaturesCount} · Listed: {plan.ListedCount} · Excluded: {plan.ExcludedCount} · Estimated: {FormatSize(plan.EstimatedBytes)}{warning}";
+        var pendingProbes = ScheduleContentProbe(plan);
+        var probing = pendingProbes > 0 ? $" · Checking contents of {pendingProbes} file(s)..." : string.Empty;
+        PlanSummary = $"Full: {plan.FullCount} · Signatures: {plan.SignaturesCount} · Listed: {plan.ListedCount} · Excluded: {plan.ExcludedCount} · Estimated: {FormatSize(plan.EstimatedBytes)}{warning}{probing}";
+        RefreshRulePresentation();
         UpdatePreview();
+    }
+
+    /// <summary>
+    /// Starts a background content check of the files the plan would render
+    /// (<c>Full</c>/<c>Signatures</c>) and whose content is not known yet. When it
+    /// finishes, the plan is rebuilt: binary files then count as <c>Listed</c>, as in the
+    /// report. Returns the number of files still to check.
+    /// </summary>
+    private int ScheduleContentProbe(CollectionPlan plan)
+    {
+        var pending = plan.Items
+            .Where(item => item.Mode is CollectionMode.Full or CollectionMode.Signatures &&
+                _contentProbe.TryGetCachedIsBinary(item.FullPath, item.SizeBytes) is null)
+            .Select(item => (item.FullPath, item.SizeBytes))
+            .ToArray();
+        _contentProbeCancellation?.Cancel();
+        _contentProbeCancellation = null;
+        if (pending.Length == 0)
+        {
+            return 0;
+        }
+
+        var cancellation = new CancellationTokenSource();
+        _contentProbeCancellation = cancellation;
+        _ = ProbeContentAsync(pending, cancellation);
+        return pending.Length;
+    }
+
+    private async Task ProbeContentAsync((string FullPath, long? SizeBytes)[] files, CancellationTokenSource cancellation)
+    {
+        var token = cancellation.Token;
+        try
+        {
+            await Task.Run(() =>
+            {
+                foreach (var (fullPath, sizeBytes) in files)
+                {
+                    token.ThrowIfCancellationRequested();
+                    _contentProbe.ProbeIsBinary(fullPath, sizeBytes);
+                }
+            }, token);
+
+            // Only the latest probe rebuilds the plan; every probed file is cached now, so
+            // the rebuild does not schedule another probe for them.
+            if (ReferenceEquals(_contentProbeCancellation, cancellation))
+            {
+                _contentProbeCancellation = null;
+                UpdatePlan();
+            }
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception exception)
+        {
+            _logger.LogWarning(exception, "The file content check failed.");
+        }
+        finally
+        {
+            cancellation.Dispose();
+        }
     }
 
     [RelayCommand]
@@ -1352,7 +1689,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
             foreach (var extension in extensions)
             {
                 var rule = _activePreset.ExtensionRules.LastOrDefault(item => string.Equals(item.Extension, extension, StringComparison.OrdinalIgnoreCase));
-                var item = new ExtensionRuleItem(extension, extensionCounts.GetValueOrDefault(extension), rule?.Enabled ?? IncludeAllExtensions, rule?.Mode ?? CollectionMode.Full);
+                var item = new ExtensionRuleItem(extension, extensionCounts.GetValueOrDefault(extension), rule?.Enabled ?? IncludeAllExtensions, rule?.Mode ?? _activePreset.GlobalMode);
                 item.Changed += OnExtensionRuleChanged;
                 ExtensionRuleItems.Add(item);
             }
@@ -1371,7 +1708,8 @@ public sealed partial class MainWindowViewModel : ObservableObject
         }
 
         _activePreset.ExtensionRules.RemoveAll(rule => string.Equals(rule.Extension, item.Extension, StringComparison.OrdinalIgnoreCase));
-        if (item.Enabled != IncludeAllExtensions || item.Mode != CollectionMode.Full)
+        // A rule is kept only when the row differs from what applies without it.
+        if (item.Enabled != IncludeAllExtensions || item.Mode != _activePreset.GlobalMode)
         {
             _activePreset.ExtensionRules.Add(new ExtensionRule(item.Extension, item.Enabled, item.Mode));
         }
@@ -1397,7 +1735,19 @@ public sealed partial class MainWindowViewModel : ObservableObject
 
     partial void OnFollowReparsePointsChanged(bool value)
     {
+        if (_suppressFilterChanges || _activePreset is null)
+        {
+            return;
+        }
+
         ApplyFilterChanges();
+        // The option changes both the tree (links become expandable) and the inventory
+        // (links are walked), so both are rebuilt.
+        RebuildTree();
+        if (_inventorySnapshot is not null && _inventorySnapshot.FollowsReparsePoints != value)
+        {
+            StartInventoryRefresh();
+        }
     }
 
     partial void OnIncludePatternsTextChanged(string value)
@@ -1413,6 +1763,18 @@ public sealed partial class MainWindowViewModel : ObservableObject
     partial void OnMaxFileSizeKiBChanged(int value)
     {
         ApplyFilterChanges();
+    }
+
+    partial void OnDefaultModeChanged(CollectionMode value)
+    {
+        if (_suppressFilterChanges || _activePreset is null)
+        {
+            return;
+        }
+
+        _activePreset.GlobalMode = value;
+        UpdateDirtyState();
+        UpdatePlan();
     }
 
     partial void OnBinaryFileModeChanged(CollectionMode value)
@@ -1519,7 +1881,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
             {
                 if (!IsRefreshingInventory)
                 {
-                    _ = RefreshInventory(CancellationToken.None);
+                    StartInventoryRefresh();
                 }
             }, null);
         }, null, interval, interval);
@@ -1591,7 +1953,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
             {
                 if (!IsRefreshingInventory)
                 {
-                    _ = RefreshInventory(CancellationToken.None);
+                    StartInventoryRefresh();
                 }
             }, null);
         }, null, TimeSpan.FromSeconds(2), Timeout.InfiniteTimeSpan);
@@ -1720,9 +2082,25 @@ public sealed partial class MainWindowViewModel : ObservableObject
         }
     }
 
+    /// <summary>
+    /// Shows the rule resolution of a node and, for a file that is in the plan, the
+    /// plan's mode and reason, so the tree agrees with the statistics and the report.
+    /// </summary>
     private void ApplyRuleResolution(FileTreeNode node)
     {
-        node.ApplyRuleResolution(_ruleSet.Resolve(node.RelativePath, GetRuleKind(node)));
+        var resolution = _ruleSet.Resolve(
+            node.RelativePath,
+            GetRuleKind(node),
+            SystemExclusions.IsVcsMetadataPath(node.RelativePath),
+            _activePreset?.GlobalMode ?? CollectionMode.Full);
+        if (!node.IsDirectory && _planItemsByPath.TryGetValue(node.RelativePath, out var planItem))
+        {
+            node.ApplyResolution(resolution, planItem.Mode, planItem.Reason);
+        }
+        else
+        {
+            node.ApplyResolution(resolution);
+        }
     }
 
     private string GetRelativePath(string fullPath)
@@ -1764,6 +2142,38 @@ public sealed partial class MainWindowViewModel : ObservableObject
             CollectionMode.Excluded => "Excluded",
             _ => throw new ArgumentOutOfRangeException(nameof(mode), mode, null)
         };
+    }
+
+    private bool IsSnapshotForCurrentRoot([NotNullWhen(true)] FileInventorySnapshot? snapshot)
+    {
+        return snapshot is not null &&
+            !string.IsNullOrWhiteSpace(snapshot.RootPath) &&
+            !string.IsNullOrWhiteSpace(ScanRoot) &&
+            string.Equals(
+                Path.TrimEndingDirectorySeparator(Path.GetFullPath(snapshot.RootPath)),
+                Path.TrimEndingDirectorySeparator(ScanRoot),
+                StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// Cancels a running inventory refresh and stops the periodic timer and the file
+    /// system watcher, so nothing refreshes a root that is no longer scanned.
+    /// </summary>
+    private void StopInventoryMonitoring()
+    {
+        // A new generation makes the cancelled run finish silently.
+        _inventoryRefreshGeneration++;
+        _inventoryRefreshCancellation?.Cancel();
+        _inventoryRefreshCancellation = null;
+        IsRefreshingInventory = false;
+        _contentProbeCancellation?.Cancel();
+        _contentProbeCancellation = null;
+        _inventoryRefreshTimer?.Dispose();
+        _inventoryRefreshTimer = null;
+        _watcherDebounceTimer?.Dispose();
+        _watcherDebounceTimer = null;
+        _inventoryWatcher?.Dispose();
+        _inventoryWatcher = null;
     }
 
     private bool IsApplicationPath(string path)

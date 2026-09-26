@@ -36,7 +36,7 @@ public sealed class CSharpSignatureExtractor : ISignatureExtractor
                 return new SignatureExtractionResult(false, null, "csharp-roslyn-v1", "signature_extraction_failed");
             }
 
-            return new SignatureExtractionResult(true, string.Join(Environment.NewLine, lines).TrimEnd() + Environment.NewLine, "csharp-roslyn-v1", diagnostics.Length == 0 ? null : "signature_syntax_warning");
+            return new SignatureExtractionResult(true, string.Join("\n", lines).TrimEnd() + "\n", "csharp-roslyn-v1", diagnostics.Length == 0 ? null : "signature_syntax_warning");
         }
         catch (Exception)
         {

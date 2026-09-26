@@ -1,0 +1,2 @@
+# The golden report is compared byte for byte and must keep LF line endings on every platform.
+*.md -text

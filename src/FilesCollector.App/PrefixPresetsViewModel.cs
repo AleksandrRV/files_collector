@@ -86,6 +86,7 @@ public sealed partial class PrefixPresetsViewModel : ObservableObject
         var validationError = PrefixPresetNameValidator.Validate(name, Items);
         if (validationError is not null)
         {
+            ReportError(validationError);
             return;
         }
 
@@ -124,6 +125,7 @@ public sealed partial class PrefixPresetsViewModel : ObservableObject
         var validationError = PrefixPresetNameValidator.Validate(name, Items);
         if (validationError is not null)
         {
+            ReportError(validationError);
             return;
         }
 
@@ -162,11 +164,11 @@ public sealed partial class PrefixPresetsViewModel : ObservableObject
         var validationError = PrefixPresetNameValidator.Validate(name, Items, _activePreset.Id);
         if (validationError is not null)
         {
+            ReportError(validationError);
             return;
         }
 
-        _activePreset.Name = name.Trim();
-        SaveCurrent();
+        RenameCurrent(name.Trim());
     }
 
     [RelayCommand(CanExecute = nameof(CanModifySelected))]
@@ -218,12 +220,23 @@ public sealed partial class PrefixPresetsViewModel : ObservableObject
         StateChanged?.Invoke(this, EventArgs.Empty);
     }
 
+    private void RevertContent()
+    {
+        Content = _savedContent;
+        IsDirty = false;
+    }
+
     private bool CanModifySelected()
     {
         return _activePreset is not null;
     }
 
-    private bool ConfirmLeavingCurrent()
+    /// <summary>
+    /// Asks what to do with unsaved prefix changes. Returns <c>false</c> when the user
+    /// cancels or saving fails, so the caller (switching presets, closing the
+    /// application) must not continue.
+    /// </summary>
+    public bool ConfirmLeavingCurrent()
     {
         if (!IsDirty)
         {
@@ -232,12 +245,17 @@ public sealed partial class PrefixPresetsViewModel : ObservableObject
 
         var request = new UnsavedChangesRequestEventArgs(SelectedName);
         UnsavedChangesRequested?.Invoke(this, request);
-        return request.Decision switch
+        switch (request.Decision)
         {
-            UnsavedChangesDecision.Save => SaveCurrent(),
-            UnsavedChangesDecision.Discard => true,
-            _ => false
-        };
+            case UnsavedChangesDecision.Save:
+                return SaveCurrent();
+            case UnsavedChangesDecision.Discard:
+                // Revert to the saved content so the next Select() does not ask again.
+                RevertContent();
+                return true;
+            default:
+                return false;
+        }
     }
 
     private bool SaveCurrent()
@@ -256,6 +274,30 @@ public sealed partial class PrefixPresetsViewModel : ObservableObject
         });
     }
 
+    /// <summary>
+    /// Renames the stored prefix preset only; unsaved content stays unsaved, as with
+    /// presets (a rename must not save other changes implicitly).
+    /// </summary>
+    private void RenameCurrent(string newName)
+    {
+        if (_activePreset is null)
+        {
+            return;
+        }
+
+        var activePreset = _activePreset;
+        ExecuteSave(() =>
+        {
+            var stored = _repository.Get(activePreset.Id) ?? throw new InvalidOperationException("The prefix preset is no longer available.");
+            stored.Name = newName;
+            _repository.Save(stored);
+            activePreset.Name = newName;
+            LoadItems();
+            OnPropertyChanged(nameof(SelectedName));
+            StateChanged?.Invoke(this, EventArgs.Empty);
+        });
+    }
+
     private bool ExecuteSave(Action action)
     {
         try
@@ -263,10 +305,11 @@ public sealed partial class PrefixPresetsViewModel : ObservableObject
             action();
             return true;
         }
-        catch (Exception exception)
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or ArgumentException or InvalidOperationException or System.Text.Json.JsonException)
         {
+            // The details (type, stack trace) go to the log; the user gets the message.
             _logger?.LogError(exception, "The prefix preset operation failed.");
-            ReportError($"{exception.GetType().Name}: {exception.Message}{Environment.NewLine}{Environment.NewLine}{exception.StackTrace}");
+            ReportError($"The prefix preset operation failed: {exception.Message}");
             return false;
         }
     }

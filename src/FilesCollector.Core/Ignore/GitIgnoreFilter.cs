@@ -9,12 +9,15 @@ namespace FilesCollector.Core.Ignore;
 /// <remarks>
 /// Matching follows gitignore(5): the last matching pattern decides the result,
 /// a negation pattern ("!") re-includes a path, and a path inside an ignored
-/// directory stays ignored because Git never descends into it. Patterns are
+/// directory stays ignored because Git never descends into it. The ".git" entry
+/// itself is always ignored, as it is by Git. Patterns are
 /// relative to the directory that contains the .gitignore file, so the filter
 /// keeps the path of that directory relative to the scan root.
 /// </remarks>
 public sealed class GitIgnoreFilter
 {
+    private const string GitMetadataName = ".git";
+
     private readonly IReadOnlyList<GitIgnorePattern> _patterns;
     private readonly string _baseRelativePath;
     private readonly ConcurrentDictionary<string, bool> _directoryDecisions = new(StringComparer.OrdinalIgnoreCase);
@@ -74,13 +77,21 @@ public sealed class GitIgnoreFilter
     {
         ArgumentNullException.ThrowIfNull(relativePath);
 
-        if (_patterns.Count == 0)
+        var normalizedPath = RuleSet.NormalizeRelativePath(relativePath);
+        if (normalizedPath.Length == 0)
         {
             return false;
         }
 
-        var normalizedPath = RuleSet.NormalizeRelativePath(relativePath);
-        if (normalizedPath.Length == 0)
+        // Git never treats its own metadata as part of the work tree: ".git" (the
+        // directory, or the file used by submodules and worktrees) is implicitly ignored
+        // at any depth, whatever the patterns say.
+        if (ContainsGitMetadataSegment(normalizedPath))
+        {
+            return true;
+        }
+
+        if (_patterns.Count == 0)
         {
             return false;
         }
@@ -105,6 +116,19 @@ public sealed class GitIgnoreFilter
         }
 
         return isDirectory ? IsDirectoryIgnored(candidatePath) : Evaluate(candidatePath, isDirectory: false);
+    }
+
+    private static bool ContainsGitMetadataSegment(string normalizedPath)
+    {
+        foreach (var segment in normalizedPath.Split('/'))
+        {
+            if (string.Equals(segment, GitMetadataName, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private bool IsDirectoryIgnored(string directoryPath)
